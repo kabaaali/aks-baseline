@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hello-world-sa
+  namespace: hello-world
+  annotations:
+    azure.workload.identity/client-id: "ded658c3-3903-4f40-bf82-893c1f0e824f"
+  labels:
+    azure.workload.identity/use: "true"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hello-world-role
+  namespace: hello-world
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hello-world-rolebinding
+  namespace: hello-world
+subjects:
+  - kind: ServiceAccount
+    name: hello-world-sa
+    namespace: hello-world
+roleRef:
+  kind: Role
+  name: hello-world-role
+  apiGroup: rbac.authorization.k8s.io

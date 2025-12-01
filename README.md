@@ -1,145 +1,308 @@
-# Azure Kubernetes Service (AKS) baseline cluster
+# AKS RBAC with Azure Entra ID - Proof of Concept
 
-This reference implementation demonstrates the *recommended starting (baseline) infrastructure architecture* for a general purpose [AKS cluster](https://azure.microsoft.com/services/kubernetes-service). This implementation and document is meant to guide an interdisciplinary team or multiple distinct teams like networking, security and development through the process of getting this general purpose baseline infrastructure deployed and understanding the components of it.
+This project demonstrates Role-Based Access Control (RBAC) implementation with Azure Kubernetes Service (AKS) using Azure Entra ID authentication from Azure API Management (APIM) to microservices running in AKS pods.
 
-We walk through the deployment here in a rather *verbose* method to help you understand each component of this cluster, ideally teaching you about each layer and providing you with the knowledge necessary to apply it to your workload.
+## 🎯 Overview
 
-## Azure Architecture Center guidance
+This implementation showcases secure, production-ready authentication between APIM and AKS microservices using **Azure Workload Identity**:
 
-This project has a companion set of articles that describe challenges, design patterns, and best practices for a secure AKS cluster. You can find this article on the Azure Architecture Center at [Azure Kubernetes Service (AKS) baseline cluster](https://aka.ms/architecture/aks-baseline). If you haven't reviewed it, we suggest you read it as it will give added context to the considerations applied in this implementation. Ultimately, this is the direct implementation of that specific architectural guidance.
+- **APIM** uses its managed identity to obtain OAuth 2.0 tokens from Azure Entra ID
+- **APIM** forwards the token to the AKS microservice in the Authorization header
+- **AKS Microservice** validates the token using workload identity federation with Entra ID
+- **End-to-end authentication** without storing credentials in the application
 
-## Architecture
+## 📁 Project Structure
 
-**This architecture is infrastructure focused**, more so than on workload. It concentrates on the AKS cluster itself, including concerns with identity, post-deployment configuration, secret management, and network topologies.
+```
+RBAC-poc-AKS/
+├── README.md                           # This file
+├── AKS_RBAC_IMPLEMENTATION_GUIDE.md   # Comprehensive step-by-step guide
+├── hello-world-service/                # .NET Core 8.0 microservice
+│   ├── Program.cs                      # Main application entry point
+│   ├── Controllers/
+│   │   └── HelloController.cs          # API controller with auth
+│   ├── hello-world-service.csproj      # Project file
+│   ├── appsettings.json                # Configuration
+│   ├── Dockerfile                      # Container image definition
+│   └── .dockerignore                   # Docker build exclusions
+├── k8s-manifests/                      # Kubernetes manifests
+│   ├── namespace.yaml                  # Namespace definition
+│   ├── rbac.yaml                       # Service account & RBAC
+│   ├── deployment.yaml                 # Deployment configuration
+│   ├── service.yaml                    # Service (LoadBalancer)
+│   └── ingress.yaml                    # Ingress configuration
+├── config/                             # Configuration files
+│   ├── environment-template.env        # Environment variables template
+│   ├── apim-policy.xml                 # APIM authentication policy
+│   └── entra-id-config.env            # Generated during setup
+└── scripts/                            # Automation scripts
+    ├── 01-setup-entra-id.sh           # Azure Entra ID setup
+    ├── 02-configure-aks-cluster.sh    # AKS workload identity config
+    ├── 03-build-and-deploy.sh         # Build & deploy microservice
+    ├── 04-setup-apim.sh               # APIM configuration
+    └── test-api.sh                    # End-to-end testing
+```
 
-The implementation presented here is the *minimum recommended baseline for most AKS clusters*. This implementation integrates with Azure services that deliver observability, provide a network topology that support multiregional growth, and keep the in-cluster traffic secure as well. This architecture should be considered your starting point for pre-production and production stages.
+## 🚀 Quick Start
 
-The material here is relatively dense. We strongly encourage you to dedicate time to walk through these instructions, with a mind to learning. Therefore, we do NOT provide any "one click" deployment here. To understand the relationship between the deployed resources, we suggest that you consult the [detailed architecture overview](./docs/aks-baseline_details.drawio.svg) while exploring your deployment. Once you've understood the components involved and identified the shared responsibilities between your team and your great organization, it is encouraged that you build suitable, auditable deployment processes around your final infrastructure.
+### Prerequisites
 
-Throughout the reference implementation, you will see reference to *Contoso Bicycle*. It is a fictional small and fast-growing startup that provides online web services to its clientele on the west coast of North America. They have no on-premises datacenters and all their containerized line of business applications are now about to be orchestrated by secure, enterprise-ready AKS clusters. You can read more about [their requirements and their IT team composition](./contoso-bicycle/README.md). This narrative provides grounding for some implementation details, naming conventions, and so on. You should adapt as you see fit.
+- Azure subscription with appropriate permissions
+- Existing AKS cluster (public cluster)
+- Azure CLI installed and configured
+- kubectl installed
+- Docker installed
+- .NET 8.0 SDK (for local development)
 
-Finally, this implementation uses the [ASP.NET Core Docker sample web app](https://github.com/dotnet/dotnet-docker/tree/master/samples/aspnetapp) as an example workload. This workload is purposefully uninteresting, as it is here exclusively to help you experience the baseline infrastructure.
+### Installation Steps
 
-### Core architecture components
+1. **Clone and Configure**
+   ```bash
+   cd RBAC-poc-AKS
+   cp config/environment-template.env config/environment.env
+   # Edit config/environment.env with your Azure details
+   ```
 
-#### Azure platform
+2. **Setup Azure Entra ID**
+   ```bash
+   chmod +x scripts/*.sh
+   ./scripts/01-setup-entra-id.sh
+   ```
+   This creates app registrations and configures API permissions.
 
-- AKS v1.30
-  - System and user [node pool separation](https://learn.microsoft.com/azure/aks/use-system-pools)
-  - [AKS-managed Microsoft Entra ID integration](https://learn.microsoft.com/azure/aks/managed-aad)
-  - Microsoft Entra ID-backed Kubernetes RBAC (*local user accounts disabled*)
-  - Managed identities
-  - [Azure CNI Overlay](https://learn.microsoft.com/azure/aks/concepts-network-azure-cni-overlay)
-  - [Azure Monitor for containers](https://learn.microsoft.com/azure/azure-monitor/containers/container-insights-overview)
-- Azure virtual networks (hub-spoke)
-  - Azure Firewall managed egress
-- Azure Application Gateway (WAF)
-- AKS-managed internal load balancers
+3. **Configure AKS Cluster**
+   ```bash
+   source config/entra-id-config.env
+   ./scripts/02-configure-aks-cluster.sh
+   ```
+   This enables workload identity and creates federated credentials.
 
-#### In-cluster OSS components
+4. **Build and Deploy Microservice**
+   ```bash
+   ./scripts/03-build-and-deploy.sh
+   ```
+   This builds the Docker image, pushes to ACR, and deploys to AKS.
 
-- [Azure Workload Identity](https://learn.microsoft.com/azure/aks/workload-identity-overview) *[AKS-managed add-on]*
-- [Flux GitOps Operator](https://fluxcd.io) *[AKS-managed extension]*
-- [ImageCleaner (Eraser)](https://learn.microsoft.com/azure/aks/image-cleaner) *[AKS-managed add-on]*
-- [Secrets Store CSI Driver for Kubernetes](https://learn.microsoft.com/azure/aks/csi-secrets-store-driver) *[AKS-managed add-on]*
-- [Traefik Ingress Controller](https://doc.traefik.io/traefik/v3.4/routing/providers/kubernetes-ingress/)
+5. **Setup APIM**
+   ```bash
+   ./scripts/04-setup-apim.sh
+   ```
+   This configures APIM with managed identity authentication.
 
-![Network diagram depicting a hub-spoke network with two peered VNets and main Azure resources used in the architecture.](https://learn.microsoft.com/azure/architecture/reference-architectures/containers/aks/images/secure-baseline-architecture.svg)
+6. **Test the Implementation**
+   ```bash
+   ./scripts/test-api.sh
+   ```
+   This runs comprehensive tests to validate the authentication flow.
 
-Also do not forget to view the [detailed architecture diagram](./docs/aks-baseline_details.drawio.svg) to understand how the deployed resources work together in this reference architecture.
+## 📖 Detailed Documentation
 
-## Deploy the reference implementation
+For comprehensive step-by-step instructions, see [AKS_RBAC_IMPLEMENTATION_GUIDE.md](./AKS_RBAC_IMPLEMENTATION_GUIDE.md).
 
-A deployment of AKS-hosted workloads typically involves a separation of duties and lifecycle management in the areas of prerequisites, the host network, the cluster infrastructure, and finally the workload itself. Different teams often are responsible for each of these components. This reference implementation follows a similar approach. Also, be aware our primary purpose is to illustrate the topology and decisions of a baseline cluster. We feel a "step-by-step" flow will help you learn the pieces of the solution and give you insight into the relationship between them. Ultimately, lifecycle/SDLC management of your cluster and its dependencies will depend on your situation (team roles, organizational standards, and so on), and will be implemented as appropriate for your needs.
+The guide includes:
+- Architecture diagrams
+- Detailed explanations of each step
+- Troubleshooting guide
+- Manual configuration steps
+- Best practices
 
-**Please start this learning journey in the *Preparing for the cluster* section.** If you follow this through to the end, you'll have our recommended baseline cluster installed, with an end-to-end sample workload running for you to reference in your own Azure subscription.
+## 🔐 Authentication Flow
 
-### 1. :rocket: Prepare for the cluster
+```
+Client → APIM → Entra ID → AKS Microservice
+```
 
-There are considerations that must be addressed before you start deploying your cluster. Do I have enough permissions in my subscription and AD tenant to do a deployment of this size? How much of this will be handled by my team directly vs having another team be responsible?
+1. Client sends request to APIM endpoint
+2. APIM uses managed identity to request token from Entra ID
+3. Entra ID validates managed identity and returns JWT token
+4. APIM forwards request with token to AKS microservice
+5. Microservice validates token using workload identity
+6. Microservice processes request and returns response
 
-- [ ] Begin by ensuring you [install and meet the prerequisites](./docs/deploy/01-prerequisites.md)
-- [ ] [Procure client-facing and AKS Ingress Controller TLS certificates](./docs/deploy/02-ca-certificates.md)
-- [ ] [Plan your Microsoft Entra ID integration](./docs/deploy/03-microsoft-entra-id.md)
+## 🧪 Testing
 
-### 2. :electric_plug: Build target network
+### Test Endpoints
 
-Microsoft recommends AKS be deployed into a carefully planned network; sized appropriately for your needs and with proper network observability. Organizations typically favor a traditional hub-spoke model, which is reflected in this implementation. While this is a standard hub-spoke model, there are fundamental sizing and portioning considerations included that should be understood.
+After deployment, you can test these endpoints:
 
-- [ ] [Build the hub-spoke network](./docs/deploy/04-networking.md)
+```bash
+# Health check (no auth required)
+curl -H "Ocp-Apim-Subscription-Key: YOUR_KEY" \
+  https://YOUR_APIM.azure-api.net/hello/health
 
-### 3. :package: Deploy the cluster
+# Public endpoint (no auth required)
+curl -H "Ocp-Apim-Subscription-Key: YOUR_KEY" \
+  https://YOUR_APIM.azure-api.net/hello/api/hello/public
 
-This is the heart of the guidance in this reference implementation; paired with prior network topology guidance. Here you will deploy the Azure resources for your cluster and the adjacent services such as Azure Application Gateway WAF, Azure Monitor, Azure Container Registry, and Azure Key Vault. This is also where you will validate the cluster is bootstrapped.
+# Authenticated endpoint (APIM acquires token)
+curl -H "Ocp-Apim-Subscription-Key: YOUR_KEY" \
+  https://YOUR_APIM.azure-api.net/hello/api/hello
+```
 
-- [ ] [Prep for cluster bootstrapping](./docs/deploy/05-bootstrap-prep.md)
-- [ ] [Deploy the AKS cluster and supporting services](./docs/deploy/06-aks-cluster.md)
-- [ ] [Validate cluster bootstrapping](./docs/deploy/07-bootstrap-validation.md)
+### Automated Testing
 
-We perform the prior steps manually here for you to understand the involved components, but we advocate for an automated DevOps process. Therefore, incorporate the prior steps into your CI/CD pipeline, as you would any infrastructure as code (IaC). See the dedicated [AKS baseline automation guidance](https://github.com/Azure/aks-baseline-automation#aks-baseline-automation) for additional details.
+Run the comprehensive test suite:
 
-### 4. :package: Deploy your workload
+```bash
+./scripts/test-api.sh
+```
 
-Without a workload deployed to the cluster it will be hard to see how these decisions come together to work as a reliable application platform for your business. The deployment of this workload would typically follow a CI/CD pattern and may involve even more advanced deployment strategies (such as blue/green). The following steps represent a manual deployment, suitable for illustration purposes of this infrastructure.
+This validates:
+- ✅ Health endpoint accessibility
+- ✅ Public endpoint functionality
+- ✅ Authenticated endpoint with token validation
+- ✅ RBAC enforcement (unauthorized access blocked)
+- ✅ Workload identity configuration
 
-- [ ] Just like the cluster, there are [workload prerequisites to address](./docs/deploy/08-workload-prerequisites.md)
-- [ ] [Configure AKS Ingress Controller with Azure Key Vault integration](./docs/deploy/09-secret-management-and-ingress-controller.md)
-- [ ] [Deploy the workload](./docs/deploy/10-workload.md)
+## 🛠️ Technology Stack
 
-### 5. :checkered_flag: Validate
+- **Azure Kubernetes Service (AKS)** - Container orchestration
+- **Azure Entra ID** - Identity and access management
+- **Azure Workload Identity** - Federated identity for Kubernetes
+- **Azure API Management** - API gateway
+- **.NET Core 8.0** - Microservice framework
+- **ASP.NET Core Web API** - REST API framework
+- **Microsoft.Identity.Web** - Azure AD authentication
+- **Docker** - Containerization
+- **Kubernetes RBAC** - Access control
 
-Now that the cluster and the sample workload is deployed; it's time to look at how the cluster is functioning.
+## 📊 Architecture
 
-- [ ] [Perform end-to-end deployment validation](./docs/deploy/11-validation.md)
+The solution implements a secure, production-ready architecture:
 
-## :broom: Clean up resources
+- **Workload Identity Federation**: No secrets stored in pods
+- **Managed Identity**: APIM authenticates without credentials
+- **JWT Token Validation**: Microservice validates tokens with Entra ID
+- **RBAC**: Fine-grained access control at Kubernetes level
+- **Security Best Practices**: Non-root containers, read-only filesystems, resource limits
 
-Most of the Azure resources deployed in the prior steps will incur ongoing charges unless removed.
+## 🔧 Configuration
 
-- [ ] [Clean up all resources](./docs/deploy/12-cleanup.md)
+### Environment Variables
 
-## Preview and additional features
+Key configuration in `config/environment.env`:
 
-Kubernetes and, by extension, AKS are fast-evolving products. The [AKS roadmap](https://aka.ms/AKS/Roadmap) shows how quickly the product is changing. This reference implementation does take dependencies on select preview features which the AKS team describes as "Shipped & Improving." The rationale behind that is that many of the preview features stay in that state for only a few months before entering GA. If you are just architecting your cluster today, by the time you're ready for production, there is a good chance that many of the preview features are nearing or will have hit GA.
+```bash
+AZURE_SUBSCRIPTION_ID="your-subscription-id"
+RESOURCE_GROUP="your-aks-resource-group"
+AKS_CLUSTER_NAME="your-aks-cluster-name"
+ACR_NAME="your-acr-name"
+APIM_NAME="your-apim-name"
+```
 
-This implementation will not include every preview feature, but instead only those that add significant value to a general-purpose cluster. There are some additional preview features you may wish to evaluate in preproduction clusters that augment your posture around security, manageability, and so on. As these features come out of preview, this reference implementation may be updated to incorporate them. Consider trying out and providing feedback on the following:
+### Azure Entra ID
 
-- [BYO Kubelet Identity](https://learn.microsoft.com/azure/aks/use-managed-identity#bring-your-own-kubelet-mi)
-- [Planned maintenance window](https://learn.microsoft.com/azure/aks/planned-maintenance)
-- [BYO CNI (`--network-plugin none`)](https://learn.microsoft.com/azure/aks/use-byo-cni)
-- [Simplified application autoscaling with Kubernetes Event-driven Autoscaling (KEDA) add-on](https://learn.microsoft.com/azure/aks/keda)
+Generated during setup in `config/entra-id-config.env`:
 
-## Advanced topics
+```bash
+TENANT_ID="your-tenant-id"
+MICROSERVICE_APP_ID="microservice-app-id"
+APIM_APP_ID="apim-app-id"
+OIDC_ISSUER_URL="aks-oidc-issuer-url"
+```
 
-This reference implementation intentionally does not cover more advanced scenarios. For example topics like the following are not addressed:
+## 🐛 Troubleshooting
 
-- Cluster lifecycle management with regard to SDLC and GitOps
-- Workload SDLC integration (including concepts like [Bridge to Kubernetes](https://learn.microsoft.com/visualstudio/containers/bridge-to-kubernetes), advanced deployment techniques, [Draft](https://learn.microsoft.com/azure/aks/draft), and so on)
-- Container security
-- Multiple (related or unrelated) workloads owned by the same team
-- Multiple workloads owned by disparate teams (AKS as a shared platform in your organization)
-- Cluster-contained state (PV and PVC)
-- Windows node pools
-- Scale-to-zero node pools and event-based scaling (KEDA)
-- [Terraform](https://learn.microsoft.com/azure/developer/terraform/create-k8s-cluster-with-tf-and-aks)
-- [dapr](https://github.com/dapr/dapr)
+### Common Issues
 
-Keep watching this space, as we build out reference implementation guidance on topics such as these. Further guidance delivered will use this baseline AKS implementation as their starting point. If you would like to contribute or suggest a pattern built on this baseline, [please get in touch](./CONTRIBUTING.md).
+1. **Workload Identity Not Working**
+   ```bash
+   # Verify workload identity is enabled
+   az aks show --resource-group RG --name CLUSTER \
+     --query "securityProfile.workloadIdentity.enabled"
+   
+   # Check service account annotations
+   kubectl describe sa hello-world-sa -n hello-world
+   ```
 
-## Final thoughts
+2. **APIM Cannot Acquire Token**
+   - Verify APIM managed identity has API.Access role
+   - Check APIM policy configuration
+   - Review APIM logs in Azure Portal
 
-Kubernetes is a very flexible platform, giving infrastructure and application operators many choices to achieve their business and technology objectives. At points along your journey, you will need to consider when to take dependencies on Azure platform features, OSS solutions, support channels, regulatory compliance, and operational processes. **We encourage this reference implementation to be the place for you to *start* architectural conversations within your own team; adapting to your specific requirements, and ultimately delivering a solution that delights your customers.**
+3. **Token Validation Fails**
+   ```bash
+   # Check pod logs
+   kubectl logs -l app=hello-world -n hello-world --tail=50
+   
+   # Verify environment variables
+   kubectl get deployment hello-world-deployment -n hello-world -o yaml
+   ```
 
-## Related documentation
+See the [Troubleshooting section](./AKS_RBAC_IMPLEMENTATION_GUIDE.md#troubleshooting) in the implementation guide for detailed solutions.
 
-- [Azure Kubernetes Service Documentation](https://learn.microsoft.com/azure/aks/)
-- [Microsoft Azure Well-Architected Framework](https://learn.microsoft.com/azure/architecture/framework/)
-- [Microservices architecture on AKS](https://learn.microsoft.com/azure/architecture/reference-architectures/containers/aks-microservices/aks-microservices)
+## 📝 Manual Steps Required
 
-## Contributions
+Some steps require manual configuration in Azure Portal:
 
-Please see our [Contributor guide](./CONTRIBUTING.md).
+1. **Expose API Scope** (Step 1, Script 1)
+   - Azure Portal → Entra ID → App Registrations → Microservice App
+   - Expose an API → Add a scope (API.Access)
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact <opencode@microsoft.com> with any additional questions or comments.
+2. **Grant API Permissions** (Step 1, Script 1)
+   - Azure Portal → Entra ID → App Registrations → APIM App
+   - API Permissions → Add permission → Grant admin consent
 
-With :heart: from Microsoft Patterns & Practices, [Azure Architecture Center](https://aka.ms/architecture).
+3. **Assign App Role** (Step 5, Script 4)
+   - Azure Portal → Entra ID → Enterprise Applications → Microservice App
+   - Users and groups → Add APIM managed identity → Assign API.Access role
+
+## 🔄 Cleanup
+
+To remove all resources:
+
+```bash
+# Delete Kubernetes resources
+kubectl delete namespace hello-world
+
+# Delete APIM API
+az apim api delete --resource-group RG --service-name APIM --api-id hello-world-api
+
+# Delete app registrations (optional)
+az ad app delete --id $MICROSERVICE_APP_ID
+az ad app delete --id $APIM_APP_ID
+
+# Delete container image
+az acr repository delete --name ACR --repository hello-world-service
+```
+
+## 📚 Additional Resources
+
+- [Azure Workload Identity Documentation](https://azure.github.io/azure-workload-identity/)
+- [AKS Workload Identity Overview](https://learn.microsoft.com/en-us/azure/aks/workload-identity-overview)
+- [APIM Authentication Policies](https://learn.microsoft.com/en-us/azure/api-management/api-management-authentication-policies)
+- [Microsoft.Identity.Web](https://learn.microsoft.com/en-us/azure/active-directory/develop/microsoft-identity-web)
+
+## 🤝 Contributing
+
+This is a proof-of-concept project. Feel free to adapt it for your needs.
+
+## 📄 License
+
+This project is provided as-is for educational and demonstration purposes.
+
+## ✨ Features
+
+- ✅ Azure Workload Identity integration
+- ✅ APIM managed identity authentication
+- ✅ JWT token validation
+- ✅ Kubernetes RBAC
+- ✅ .NET Core 8.0 microservice
+- ✅ Docker containerization
+- ✅ Automated deployment scripts
+- ✅ Comprehensive testing
+- ✅ Security best practices
+- ✅ Production-ready architecture
+
+## 📞 Support
+
+For issues or questions:
+1. Review the [Implementation Guide](./AKS_RBAC_IMPLEMENTATION_GUIDE.md)
+2. Check the [Troubleshooting section](#troubleshooting)
+3. Review pod logs and APIM diagnostics
+
+---
+
+**Version:** 1.0  
+**Last Updated:** 2025-11-26  
+**Author:** Antigravity AI Assistant

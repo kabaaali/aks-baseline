@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "Hash": "iEkXarNIyoOK5560qzvcIB8+cQ629d9Oeitlmg4WaUU=",
+  "Source": "hello-world-service",
+  "BasePath": "_content/hello-world-service",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": []
+}

@@ -1,0 +1,89 @@
+<policies>
+    <inbound>
+        <base />
+        <!-- Acquire token from Azure Entra ID using APIM's managed identity -->
+        <authentication-managed-identity 
+            resource="api://ded658c3-3903-4f40-bf82-893c1f0e824f" 
+            output-token-variable-name="msi-access-token" 
+            ignore-error="false" />
+        
+        <!-- Set the Authorization header with the acquired token -->
+        <set-header name="Authorization" exists-action="override">
+            <value>@("Bearer " + (string)context.Variables["msi-access-token"])</value>
+        </set-header>
+        
+        <!-- Remove the subscription key from being forwarded to backend -->
+        <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+        
+        <!-- CORS policy -->
+        <cors allow-credentials="false">
+            <allowed-origins>
+                <origin>*</origin>
+            </allowed-origins>
+            <allowed-methods>
+                <method>GET</method>
+                <method>POST</method>
+                <method>PUT</method>
+                <method>DELETE</method>
+                <method>OPTIONS</method>
+            </allowed-methods>
+            <allowed-headers>
+                <header>*</header>
+            </allowed-headers>
+        </cors>
+        
+        <!-- Rate limiting -->
+        <rate-limit calls="100" renewal-period="60" />
+        
+        <!-- Log the request -->
+        <trace source="apim-policy">
+            <message>@{
+                return new JObject(
+                    new JProperty("method", context.Request.Method),
+                    new JProperty("url", context.Request.Url.ToString()),
+                    new JProperty("hasToken", context.Variables.ContainsKey("msi-access-token"))
+                ).ToString();
+            }</message>
+        </trace>
+    </inbound>
+    
+    <backend>
+        <base />
+    </backend>
+    
+    <outbound>
+        <base />
+        <!-- Remove sensitive headers from response -->
+        <set-header name="X-Powered-By" exists-action="delete" />
+        <set-header name="X-AspNet-Version" exists-action="delete" />
+    </outbound>
+    
+    <on-error>
+        <base />
+        <!-- Log errors -->
+        <trace source="apim-policy-error">
+            <message>@{
+                return new JObject(
+                    new JProperty("error", context.LastError.Message),
+                    new JProperty("source", context.LastError.Source),
+                    new JProperty("reason", context.LastError.Reason)
+                ).ToString();
+            }</message>
+        </trace>
+        
+        <!-- Return friendly error message -->
+        <return-response>
+            <set-status code="500" reason="Internal Server Error" />
+            <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+            </set-header>
+            <set-body>@{
+                return new JObject(
+                    new JProperty("error", "An error occurred processing your request"),
+                    new JProperty("message", context.LastError.Message),
+                    new JProperty("timestamp", DateTime.UtcNow.ToString("o"))
+                ).ToString();
+            }</set-body>
+        </return-response>
+    </on-error>
+</policies>
