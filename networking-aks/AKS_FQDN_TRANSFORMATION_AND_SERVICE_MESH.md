@@ -2,7 +2,13 @@
 
 ## Overview
 
-This document explains how FQDNs change throughout the request flow, how microservices handle these transformations, pod-to-pod communication patterns, service mesh integration, and multi-namespace architecture with different FQDN endpoints.
+This document explains how FQDNs change throughout the request flow in an **AKS automatic private cluster with NGINX Ingress Controller** (default ingress), how microservices handle these transformations, pod-to-pod communication using internal FQDNs, optional service mesh integration (Istio), and multi-namespace architecture with different FQDN endpoints.
+
+**Key Architecture Points:**
+- **NGINX Ingress Controller**: Default ingress in AKS automatic private cluster (not Istio Gateway)
+- **Service Mesh (Istio)**: Optional layer for mTLS, advanced traffic management, and observability
+- **Pod-to-Pod Communication**: Uses internal FQDNs (service.namespace.svc.cluster.local) for service discovery
+- **API Backend Services**: Microservices that handle business logic (not frontend applications)
 
 ---
 
@@ -26,34 +32,34 @@ sequenceDiagram
     participant Client
     participant CF as Cloudflare
     participant APIM
-    participant NGINX as NGINX Ingress
-    participant Frontend as Frontend Pod
-    participant Backend as Backend Pod
-    participant DB as Database Pod
+    participant NGINX as NGINX Ingress<br/>(AKS Default)
+    participant UserAPI as User API Backend
+    participant OrderAPI as Order API Backend
+    participant DB as Database Service
 
-    Note over Client: FQDN #1
+    Note over Client: FQDN #1: Public
     Client->>CF: https://api.example.com/users/123
     Note over Client,CF: Host: api.example.com
 
-    Note over CF: FQDN #2
+    Note over CF: FQDN #2: APIM
     CF->>APIM: https://apim-prod.azure-api.net/users/123
     Note over CF,APIM: Host: api.example.com<br/>X-Forwarded-Host: api.example.com
 
-    Note over APIM: FQDN #3
-    APIM->>NGINX: https://frontend.apps.internal.local/api/v1/users/123
-    Note over APIM,NGINX: Host: frontend.apps.internal.local<br/>X-Original-Host: api.example.com
+    Note over APIM: FQDN #3: Private DNS
+    APIM->>NGINX: https://users-api.apps.internal.local/api/v1/users/123
+    Note over APIM,NGINX: Host: users-api.apps.internal.local<br/>X-Original-Host: api.example.com
 
-    Note over NGINX: FQDN #4
-    NGINX->>Frontend: http://frontend-service.frontend-ns.svc.cluster.local:8080/api/v1/users/123
-    Note over NGINX,Frontend: Host: frontend-service:8080<br/>X-Forwarded-Host: api.example.com
+    Note over NGINX: FQDN #4: K8s Service
+    NGINX->>UserAPI: http://users-api-service.users-ns.svc.cluster.local:8080/api/v1/users/123
+    Note over NGINX,UserAPI: Host: users-api-service.users-ns.svc.cluster.local<br/>X-Forwarded-Host: api.example.com
 
-    Note over Frontend: FQDN #5 (Pod-to-Pod)
-    Frontend->>Backend: http://backend-service.backend-ns.svc.cluster.local:8080/api/users/123
-    Note over Frontend,Backend: Host: backend-service.backend-ns.svc.cluster.local
+    Note over UserAPI: FQDN #5: Pod-to-Pod (Internal FQDN)
+    UserAPI->>OrderAPI: http://orders-api-service.orders-ns.svc.cluster.local:8080/api/orders?userId=123
+    Note over UserAPI,OrderAPI: Host: orders-api-service.orders-ns.svc.cluster.local<br/>X-Request-ID: correlation-id
 
-    Note over Backend: FQDN #6 (Pod-to-Pod)
-    Backend->>DB: http://database-service.data-ns.svc.cluster.local:5432
-    Note over Backend,DB: Host: database-service.data-ns.svc.cluster.local
+    Note over OrderAPI: FQDN #6: Pod-to-Pod (Internal FQDN)
+    OrderAPI->>DB: postgresql://database-service.data-ns.svc.cluster.local:5432/ordersdb
+    Note over OrderAPI,DB: Host: database-service.data-ns.svc.cluster.local
 ```
 
 ### FQDN Transformation Table
@@ -62,10 +68,12 @@ sequenceDiagram
 |-----|------|----------|-------------|----------|---------|
 | 1 | api.example.com | Public DNS (Cloudflare) | 20.123.45.67 | HTTPS | Client-facing endpoint |
 | 2 | apim-prod.azure-api.net | Azure DNS | 10.100.2.20 | HTTPS | APIM gateway endpoint |
-| 3 | frontend.apps.internal.local | Azure Private DNS | 10.240.0.10 | HTTPS | NGINX Ingress endpoint |
-| 4 | frontend-service.frontend-ns.svc.cluster.local | CoreDNS (K8s) | 10.0.150.20 | HTTP | Kubernetes Service (ClusterIP) |
-| 5 | backend-service.backend-ns.svc.cluster.local | CoreDNS (K8s) | 10.0.151.30 | HTTP | Backend service (pod-to-pod) |
-| 6 | database-service.data-ns.svc.cluster.local | CoreDNS (K8s) | 10.0.152.40 | TCP | Database service |
+| 3 | users-api.apps.internal.local | Azure Private DNS | 10.240.0.10 | HTTPS | NGINX Ingress endpoint (AKS default) |
+| 4 | users-api-service.users-ns.svc.cluster.local | CoreDNS (K8s) | 10.0.150.20 | HTTP | User API Kubernetes Service |
+| 5 | orders-api-service.orders-ns.svc.cluster.local | CoreDNS (K8s) | 10.0.151.30 | HTTP | Order API service (pod-to-pod via internal FQDN) |
+| 6 | database-service.data-ns.svc.cluster.local | CoreDNS (K8s) | 10.0.152.40 | TCP | Database service (pod-to-pod via internal FQDN) |
+
+**Note**: All pod-to-pod communication uses full Kubernetes Service FQDNs for proper service discovery across namespaces.
 
 ---
 
@@ -86,7 +94,7 @@ public class FqdnAwareController : ControllerBase
     public async Task<IActionResult> GetUser(int id)
     {
         // Extract all FQDN-related headers
-        var currentHost = HttpContext.Request.Host.ToString(); // frontend-service:8080
+        var currentHost = HttpContext.Request.Host.ToString(); // users-api-service.users-ns.svc.cluster.local:8080
         var originalHost = HttpContext.Request.Headers["X-Forwarded-Host"].FirstOrDefault(); // api.example.com
         var forwardedProto = HttpContext.Request.Headers["X-Forwarded-Proto"].FirstOrDefault(); // https
         var originalUri = HttpContext.Request.Headers["X-Original-URI"].FirstOrDefault(); // /users/123
@@ -223,40 +231,40 @@ public class FqdnTrackingMiddleware
 
 ```mermaid
 graph TD
-    subgraph Namespace_Frontend["Namespace: frontend-ns"]
-        FrontendPod[Frontend Pod<br/>10.244.1.15]
-        FrontendSvc[Service: frontend-service<br/>ClusterIP: 10.0.150.20]
+    subgraph Namespace_Users["Namespace: users-ns"]
+        UserPod[User API Pod<br/>10.244.1.15]
+        UserSvc[Service: users-api-service<br/>ClusterIP: 10.0.150.20<br/>FQDN: users-api-service.users-ns.svc.cluster.local]
     end
     
-    subgraph Namespace_Backend["Namespace: backend-ns"]
-        BackendPod1[Backend Pod 1<br/>10.244.2.23]
-        BackendPod2[Backend Pod 2<br/>10.244.2.24]
-        BackendSvc[Service: backend-service<br/>ClusterIP: 10.0.151.30]
+    subgraph Namespace_Orders["Namespace: orders-ns"]
+        OrderPod1[Order API Pod 1<br/>10.244.2.23]
+        OrderPod2[Order API Pod 2<br/>10.244.2.24]
+        OrderSvc[Service: orders-api-service<br/>ClusterIP: 10.0.151.30<br/>FQDN: orders-api-service.orders-ns.svc.cluster.local]
     end
     
     subgraph Namespace_Data["Namespace: data-ns"]
         DBPod[Database Pod<br/>10.244.3.41]
-        DBSvc[Service: database-service<br/>ClusterIP: 10.0.152.40]
+        DBSvc[Service: database-service<br/>ClusterIP: 10.0.152.40<br/>FQDN: database-service.data-ns.svc.cluster.local]
     end
     
-    subgraph CoreDNS["CoreDNS"]
+    subgraph CoreDNS["CoreDNS (Kubernetes DNS)"]
         DNS[DNS Server<br/>10.0.0.10]
     end
     
-    FrontendPod -->|1. DNS Query:<br/>backend-service.backend-ns.svc.cluster.local| DNS
-    DNS -->|2. A Record: 10.0.151.30| FrontendPod
-    FrontendPod -->|3. HTTP Request| BackendSvc
-    BackendSvc -->|4. Load Balance| BackendPod1
-    BackendSvc -->|4. Load Balance| BackendPod2
+    UserPod -->|1. DNS Query:<br/>orders-api-service.orders-ns.svc.cluster.local| DNS
+    DNS -->|2. A Record: 10.0.151.30| UserPod
+    UserPod -->|3. HTTP Request with internal FQDN| OrderSvc
+    OrderSvc -->|4. Load Balance| OrderPod1
+    OrderSvc -->|4. Load Balance| OrderPod2
     
-    BackendPod1 -->|5. DNS Query:<br/>database-service.data-ns.svc.cluster.local| DNS
-    DNS -->|6. A Record: 10.0.152.40| BackendPod1
-    BackendPod1 -->|7. TCP Connection| DBSvc
+    OrderPod1 -->|5. DNS Query:<br/>database-service.data-ns.svc.cluster.local| DNS
+    DNS -->|6. A Record: 10.0.152.40| OrderPod1
+    OrderPod1 -->|7. TCP Connection with internal FQDN| DBSvc
     DBSvc -->|8. Route| DBPod
     
-    style FrontendPod fill:#ffcccc,stroke:#333,stroke-width:2px
-    style BackendPod1 fill:#ccffcc,stroke:#333,stroke-width:2px
-    style BackendPod2 fill:#ccffcc,stroke:#333,stroke-width:2px
+    style UserPod fill:#ffcccc,stroke:#333,stroke-width:2px
+    style OrderPod1 fill:#ccffcc,stroke:#333,stroke-width:2px
+    style OrderPod2 fill:#ccffcc,stroke:#333,stroke-width:2px
     style DBPod fill:#ccccff,stroke:#333,stroke-width:2px
 ```
 
@@ -264,33 +272,38 @@ graph TD
 
 **Format**: `<service-name>.<namespace>.svc.cluster.local`
 
+**Best Practice**: Always use full FQDN for pod-to-pod communication, even within the same namespace, for clarity and consistency.
+
 **Examples**:
-- Same namespace: `backend-service` or `backend-service.backend-ns.svc.cluster.local`
-- Different namespace: `backend-service.backend-ns.svc.cluster.local` (full FQDN required)
-- Short form (same namespace): `backend-service`
+- **Recommended (Full FQDN)**: `orders-api-service.orders-ns.svc.cluster.local`
+- **Cross-namespace (Required)**: `users-api-service.users-ns.svc.cluster.local`
+- **Same namespace (Short form)**: `orders-api-service` (works but not recommended)
+- **With port**: `orders-api-service.orders-ns.svc.cluster.local:8080`
 
 ### Pod-to-Pod Communication Implementation
 
-**Frontend Service calling Backend Service:**
+**User API Service calling Order API Service (using internal FQDNs):**
 
 ```csharp
-// appsettings.json
+// appsettings.json - User API Service configuration
 {
   "Services": {
-    "Backend": {
-      "BaseUrl": "http://backend-service.backend-ns.svc.cluster.local:8080",
+    "OrdersAPI": {
+      "BaseUrl": "http://orders-api-service.orders-ns.svc.cluster.local:8080",
       "Timeout": 30
     },
-    "UserService": {
-      "BaseUrl": "http://user-service.users-ns.svc.cluster.local:8080",
+    "ProductsAPI": {
+      "BaseUrl": "http://products-api-service.products-ns.svc.cluster.local:8080",
       "Timeout": 30
     },
-    "OrderService": {
-      "BaseUrl": "http://order-service.orders-ns.svc.cluster.local:8080",
+    "PaymentsAPI": {
+      "BaseUrl": "http://payments-api-service.payments-ns.svc.cluster.local:8080",
       "Timeout": 30
     }
   }
 }
+
+// Note: All URLs use full Kubernetes Service FQDNs for cross-namespace communication
 ```
 
 ```csharp
@@ -309,31 +322,33 @@ public class ServiceEndpoint
 // Program.cs
 builder.Services.Configure<ServiceSettings>(builder.Configuration);
 
-builder.Services.AddHttpClient("BackendService", (serviceProvider, client) =>
+builder.Services.AddHttpClient("OrdersAPIClient", (serviceProvider, client) =>
 {
     var settings = serviceProvider.GetRequiredService<IOptions<ServiceSettings>>().Value;
-    var backendConfig = settings.Services["Backend"];
+    var ordersConfig = settings.Services["OrdersAPI"];
     
-    client.BaseAddress = new Uri(backendConfig.BaseUrl);
-    client.Timeout = TimeSpan.FromSeconds(backendConfig.Timeout);
+    // Use full internal FQDN for service discovery
+    client.BaseAddress = new Uri(ordersConfig.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(ordersConfig.Timeout);
     
     // Add default headers for pod-to-pod communication
-    client.DefaultRequestHeaders.Add("X-Service-Name", "frontend-service");
+    client.DefaultRequestHeaders.Add("X-Service-Name", "users-api-service");
+    client.DefaultRequestHeaders.Add("X-Service-Namespace", "users-ns");
     client.DefaultRequestHeaders.Add("X-Service-Version", "1.2.3");
 })
 .AddPolicyHandler(GetRetryPolicy())
 .AddPolicyHandler(GetCircuitBreakerPolicy());
 
-// Frontend service calling backend
-public class FrontendService
+// User API service calling Orders API service (pod-to-pod with internal FQDN)
+public class UserApiService
 {
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILogger<FrontendService> _logger;
+    private readonly ILogger<UserApiService> _logger;
     private readonly IRequestContext _requestContext;
 
-    public FrontendService(
+    public UserApiService(
         IHttpClientFactory httpClientFactory, 
-        ILogger<FrontendService> logger,
+        ILogger<UserApiService> logger,
         IRequestContext requestContext)
     {
         _httpClientFactory = httpClientFactory;
@@ -341,21 +356,22 @@ public class FrontendService
         _requestContext = requestContext;
     }
 
-    public async Task<UserDetailsDto> GetUserDetailsAsync(int userId)
+    public async Task<List<OrderDto>> GetUserOrdersAsync(int userId)
     {
-        var client = _httpClientFactory.CreateClient("BackendService");
+        // Client is configured with internal FQDN: orders-api-service.orders-ns.svc.cluster.local:8080
+        var client = _httpClientFactory.CreateClient("OrdersAPIClient");
         
-        // Propagate correlation headers to backend
-        var request = new HttpRequestMessage(HttpMethod.Get, $"/api/users/{userId}");
+        // Propagate correlation headers for distributed tracing
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/api/orders?userId={userId}");
         request.Headers.Add("X-Request-ID", Activity.Current?.Id ?? Guid.NewGuid().ToString());
         request.Headers.Add("X-Correlation-ID", Activity.Current?.RootId);
         
-        // Propagate original host information (optional)
+        // Propagate original host information for HATEOAS links
         request.Headers.Add("X-Original-Host", _requestContext.OriginalHost);
         request.Headers.Add("X-Original-Scheme", _requestContext.OriginalScheme);
 
         _logger.LogInformation(
-            "Calling backend service at {BackendUrl} for user {UserId}",
+            "Pod-to-pod call: User API -> Orders API at {OrdersApiUrl} for user {UserId}",
             client.BaseAddress, userId);
 
         var response = await client.SendAsync(request);
@@ -363,13 +379,13 @@ public class FrontendService
         if (!response.IsSuccessStatusCode)
         {
             _logger.LogError(
-                "Backend service returned {StatusCode} for user {UserId}",
+                "Orders API service returned {StatusCode} for user {UserId}",
                 response.StatusCode, userId);
-            throw new HttpRequestException($"Backend service error: {response.StatusCode}");
+            throw new HttpRequestException($"Orders API error: {response.StatusCode}");
         }
 
         var content = await response.Content.ReadAsStringAsync();
-        return JsonSerializer.Deserialize<UserDetailsDto>(content);
+        return JsonSerializer.Deserialize<List<OrderDto>>(content);
     }
 }
 ```
@@ -380,22 +396,22 @@ public class FrontendService
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: frontend-service-config
-  namespace: frontend-ns
+  name: users-api-config
+  namespace: users-ns
 data:
   appsettings.json: |
     {
       "Services": {
-        "Backend": {
-          "BaseUrl": "http://backend-service.backend-ns.svc.cluster.local:8080",
+        "OrdersAPI": {
+          "BaseUrl": "http://orders-api-service.orders-ns.svc.cluster.local:8080",
           "Timeout": 30
         },
-        "UserService": {
-          "BaseUrl": "http://user-service.users-ns.svc.cluster.local:8080",
+        "ProductsAPI": {
+          "BaseUrl": "http://products-api-service.products-ns.svc.cluster.local:8080",
           "Timeout": 30
         },
-        "OrderService": {
-          "BaseUrl": "http://order-service.orders-ns.svc.cluster.local:8080",
+        "PaymentsAPI": {
+          "BaseUrl": "http://payments-api-service.payments-ns.svc.cluster.local:8080",
           "Timeout": 30
         }
       }
@@ -404,36 +420,62 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: frontend-service
-  namespace: frontend-ns
+  name: users-api-service
+  namespace: users-ns
 spec:
   template:
     spec:
       containers:
-      - name: frontend
+      - name: users-api
         volumeMounts:
         - name: config
           mountPath: /app/config
       volumes:
       - name: config
         configMap:
-          name: frontend-service-config
+          name: users-api-config
 ```
 
 ---
 
-## Service Mesh Integration
+## Service Mesh Integration (Optional Enhancement)
 
-### Why Service Mesh?
+> **Important**: This section describes **optional** service mesh integration with Istio. The AKS automatic private cluster uses **NGINX Ingress Controller as the default ingress**, which handles external traffic routing and TLS termination. Istio service mesh is an additional layer that can be added for enhanced pod-to-pod security (mTLS), advanced traffic management, and observability.
+
+### Architecture: NGINX Ingress (Default) + Istio Service Mesh (Optional)
+
+**Two Deployment Options:**
+
+#### Option 1: NGINX Ingress Only (Default AKS Automatic)
+- **Ingress**: NGINX Ingress Controller (default in AKS automatic)
+- **Pod-to-Pod**: Plain HTTP using internal FQDNs
+- **Security**: Application-level authentication, network policies
+- **Simplicity**: Lower complexity, easier to manage
+
+#### Option 2: NGINX Ingress + Istio Service Mesh (Enhanced)
+- **Ingress**: NGINX Ingress Controller (handles external traffic)
+- **Service Mesh**: Istio (handles pod-to-pod communication)
+- **Pod-to-Pod**: Automatic mTLS via Envoy sidecars
+- **Advanced Features**: Traffic splitting, circuit breaking, distributed tracing
+
+### Why Add Service Mesh (Istio)?
 
 **Problems Service Mesh Solves:**
-1. **mTLS**: Automatic encryption for pod-to-pod communication
-2. **Traffic Management**: Advanced routing, retries, timeouts
-3. **Observability**: Automatic distributed tracing, metrics
-4. **Security**: Fine-grained access control between services
-5. **Resilience**: Circuit breaking, fault injection
+1. **mTLS**: Automatic encryption for pod-to-pod communication (without code changes)
+2. **Traffic Management**: Advanced routing, retries, timeouts, canary deployments
+3. **Observability**: Automatic distributed tracing, metrics collection
+4. **Security**: Fine-grained access control between services (AuthorizationPolicy)
+5. **Resilience**: Circuit breaking, fault injection for chaos testing
 
-### Architecture with Istio Service Mesh
+**When to Use Service Mesh:**
+- ✅ Multiple microservices with complex inter-service communication
+- ✅ Need for zero-trust security (mTLS between all services)
+- ✅ Advanced deployment strategies (canary, blue-green)
+- ✅ Compliance requirements for encryption in transit
+- ❌ Simple applications with few services
+- ❌ Team lacks service mesh expertise
+
+### Architecture with NGINX + Istio
 
 ```mermaid
 graph TB
@@ -446,46 +488,52 @@ graph TB
         APIM[APIM]
     end
     
-    subgraph AKS_Cluster["AKS Cluster with Istio"]
-        subgraph Istio_Ingress["Istio Ingress Gateway"]
-            IstioGW[Istio Gateway<br/>10.240.0.10]
+    subgraph AKS_Cluster["AKS Automatic Private Cluster"]
+        subgraph NGINX_Ingress["NGINX Ingress (Default)"]
+            NGINX[NGINX Ingress Controller<br/>10.240.0.10<br/>Handles External Traffic]
         end
         
-        subgraph Frontend_NS["Namespace: frontend-ns"]
-            FrontendPod[Frontend Pod]
-            FrontendEnvoy[Envoy Sidecar]
-            FrontendPod -.->|localhost| FrontendEnvoy
+        subgraph Users_NS["Namespace: users-ns"]
+            UserPod[User API Pod]
+            UserEnvoy[Envoy Sidecar<br/>Istio Proxy]
+            UserPod -.->|localhost:15001| UserEnvoy
         end
         
-        subgraph Backend_NS["Namespace: backend-ns"]
-            BackendPod[Backend Pod]
-            BackendEnvoy[Envoy Sidecar]
-            BackendPod -.->|localhost| BackendEnvoy
+        subgraph Orders_NS["Namespace: orders-ns"]
+            OrderPod[Order API Pod]
+            OrderEnvoy[Envoy Sidecar<br/>Istio Proxy]
+            OrderPod -.->|localhost:15001| OrderEnvoy
         end
         
-        subgraph Istio_Control["Istio Control Plane"]
+        subgraph Istio_Control["Istio Control Plane (Optional)"]
             Istiod[Istiod<br/>Config, Certs, Telemetry]
         end
     end
     
     Client -->|HTTPS| CF
     CF -->|HTTPS| APIM
-    APIM -->|HTTPS| IstioGW
+    APIM -->|HTTPS| NGINX
     
-    IstioGW -->|mTLS| FrontendEnvoy
-    FrontendEnvoy -->|HTTP| FrontendPod
+    NGINX -->|HTTP| UserEnvoy
+    UserEnvoy -->|HTTP| UserPod
     
-    FrontendEnvoy -->|mTLS| BackendEnvoy
-    BackendEnvoy -->|HTTP| BackendPod
+    UserEnvoy -->|mTLS<br/>Pod-to-Pod| OrderEnvoy
+    OrderEnvoy -->|HTTP| OrderPod
     
-    Istiod -.->|Config| IstioGW
-    Istiod -.->|Config & Certs| FrontendEnvoy
-    Istiod -.->|Config & Certs| BackendEnvoy
+    Istiod -.->|Config & Certs| UserEnvoy
+    Istiod -.->|Config & Certs| OrderEnvoy
     
-    style FrontendEnvoy fill:#99ccff,stroke:#333,stroke-width:2px
-    style BackendEnvoy fill:#99ccff,stroke:#333,stroke-width:2px
+    style NGINX fill:#99ff66,stroke:#333,stroke-width:3px
+    style UserEnvoy fill:#99ccff,stroke:#333,stroke-width:2px
+    style OrderEnvoy fill:#99ccff,stroke:#333,stroke-width:2px
     style Istiod fill:#ff99cc,stroke:#333,stroke-width:2px
 ```
+
+**Key Points:**
+- **NGINX Ingress**: Remains the entry point for external traffic (from APIM)
+- **Istio Sidecars**: Only intercept pod-to-pod communication within the cluster
+- **No Istio Gateway**: We use NGINX Ingress, not Istio Ingress Gateway
+- **mTLS**: Automatic between pods with Istio sidecars
 
 ### Istio Installation and Configuration
 
