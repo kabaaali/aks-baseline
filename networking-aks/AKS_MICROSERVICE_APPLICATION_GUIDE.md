@@ -576,60 +576,245 @@ public class SecurityMiddleware
 
 ### 3. Secrets Management
 
-**DO NOT hardcode secrets in application code!**
+**DO NOT hardcode secrets in application code or store them in Kubernetes Secrets!**
 
 ```csharp
 // ❌ WRONG - Hardcoded secrets
 var connectionString = "Server=myserver;Database=mydb;User=sa;Password=P@ssw0rd123";
 
-// ✅ CORRECT - Use Azure Key Vault or Kubernetes Secrets
+// ❌ WRONG - Secrets in Kubernetes manifests
+stringData:
+  database-password: "P@ssw0rd123"  // Never do this!
+
+// ✅ CORRECT - Use Azure Key Vault with Workload Identity
 public class DatabaseSettings
 {
-    public string ConnectionString { get; set; }
+    public string ConnectionString { get; set; }  // Loaded from Azure Key Vault
 }
 
 // Program.cs
-builder.Configuration.AddAzureKeyVault(
-    new Uri($"https://{keyVaultName}.vault.azure.net/"),
-    new DefaultAzureCredential());
+var builder = WebApplication.CreateBuilder(args);
+
+// Option 1: Direct Azure Key Vault integration (for local dev)
+if (builder.Environment.IsDevelopment())
+{
+    var keyVaultName = builder.Configuration["KeyVault:Name"];
+    builder.Configuration.AddAzureKeyVault(
+        new Uri($"https://{keyVaultName}.vault.azure.net/"),
+        new DefaultAzureCredential());
+}
+
+// Option 2: In AKS, secrets are injected via CSI driver (production)
+// No code changes needed - environment variables are populated automatically
 
 builder.Services.Configure<DatabaseSettings>(
     builder.Configuration.GetSection("Database"));
 ```
 
-**Kubernetes Secret Configuration:**
+**Azure Key Vault Setup with Workload Identity:**
+
+```bash
+# 1. Enable Workload Identity on AKS cluster
+az aks update \
+  --resource-group rg-aks-prod \
+  --name aks-prod \
+  --enable-oidc-issuer \
+  --enable-workload-identity
+
+# Get OIDC Issuer URL
+OIDC_ISSUER=$(az aks show \
+  --resource-group rg-aks-prod \
+  --name aks-prod \
+  --query "oidcIssuerProfile.issuerUrl" -o tsv)
+
+# 2. Create Azure Key Vault
+az keyvault create \
+  --name kv-aks-prod-secrets \
+  --resource-group rg-aks-prod \
+  --location eastus \
+  --enable-rbac-authorization true
+
+# 3. Store secrets in Key Vault (NOT in Kubernetes)
+az keyvault secret set \
+  --vault-name kv-aks-prod-secrets \
+  --name app1-db-connection \
+  --value "Server=sqlserver.database.windows.net;Database=mydb;User ID=appuser;Password=<secure-password>"
+
+az keyvault secret set \
+  --vault-name kv-aks-prod-secrets \
+  --name app1-redis-connection \
+  --value "redis-cache.redis.cache.windows.net:6380,password=<secure-password>,ssl=True"
+
+# 4. Create Managed Identity for Workload Identity
+az identity create \
+  --name id-app1-workload \
+  --resource-group rg-aks-prod \
+  --location eastus
+
+IDENTITY_CLIENT_ID=$(az identity show \
+  --name id-app1-workload \
+  --resource-group rg-aks-prod \
+  --query clientId -o tsv)
+
+IDENTITY_OBJECT_ID=$(az identity show \
+  --name id-app1-workload \
+  --resource-group rg-aks-prod \
+  --query principalId -o tsv)
+
+# 5. Grant identity access to Key Vault
+az role assignment create \
+  --role "Key Vault Secrets User" \
+  --assignee-object-id $IDENTITY_OBJECT_ID \
+  --assignee-principal-type ServicePrincipal \
+  --scope $(az keyvault show --name kv-aks-prod-secrets --query id -o tsv)
+
+# 6. Create federated identity credential (links K8s SA to Azure Identity)
+az identity federated-credential create \
+  --name app1-federated-credential \
+  --identity-name id-app1-workload \
+  --resource-group rg-aks-prod \
+  --issuer $OIDC_ISSUER \
+  --subject system:serviceaccount:default:app1-sa \
+  --audience api://AzureADTokenExchange
+
+# 7. Enable Azure Key Vault CSI Driver
+az aks enable-addons \
+  --resource-group rg-aks-prod \
+  --name aks-prod \
+  --addons azure-keyvault-secrets-provider \
+  --enable-secret-rotation
+```
+
+**Kubernetes Configuration with Workload Identity:**
+
 ```yaml
+# 1. ServiceAccount with Workload Identity annotation
 apiVersion: v1
-kind: Secret
+kind: ServiceAccount
+metadata:
+  name: app1-sa
+  namespace: default
+  annotations:
+    azure.workload.identity/client-id: "<IDENTITY_CLIENT_ID>"  # From step 4
+    azure.workload.identity/tenant-id: "<TENANT_ID>"
+---
+# 2. SecretProviderClass - Maps Azure Key Vault secrets
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
 metadata:
   name: app1-secrets
   namespace: default
-type: Opaque
-stringData:
-  database-connection: "Server=myserver.database.windows.net;Database=mydb;User ID=appuser;Password=<from-keyvault>"
-  redis-connection: "redis-cache.redis.cache.windows.net:6380,password=<from-keyvault>,ssl=True"
+spec:
+  provider: azure
+  parameters:
+    usePodIdentity: "false"
+    useVMManagedIdentity: "false"
+    clientID: "<IDENTITY_CLIENT_ID>"  # Workload Identity client ID
+    keyvaultName: "kv-aks-prod-secrets"
+    cloudName: "AzurePublicCloud"
+    objects: |
+      array:
+        - |
+          objectName: app1-db-connection
+          objectType: secret
+          objectVersion: ""
+        - |
+          objectName: app1-redis-connection
+          objectType: secret
+          objectVersion: ""
+    tenantId: "<TENANT_ID>"
+  secretObjects:
+  - secretName: app1-kv-secrets
+    type: Opaque
+    data:
+    - objectName: app1-db-connection
+      key: database-connection
+    - objectName: app1-redis-connection
+      key: redis-connection
 ---
+# 3. Deployment using Workload Identity
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: app1
+  namespace: default
 spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: app1
   template:
+    metadata:
+      labels:
+        app: app1
+        azure.workload.identity/use: "true"  # Enable Workload Identity
     spec:
+      serviceAccountName: app1-sa  # Use service account with federated identity
       containers:
       - name: app1
         image: myregistry.azurecr.io/app1:1.2.3
+        ports:
+        - containerPort: 8080
+        
+        # Secrets from Azure Key Vault (via CSI driver + Workload Identity)
         env:
         - name: Database__ConnectionString
           valueFrom:
             secretKeyRef:
-              name: app1-secrets
+              name: app1-kv-secrets  # Synced from Key Vault
               key: database-connection
         - name: Redis__ConnectionString
           valueFrom:
             secretKeyRef:
-              name: app1-secrets
+              name: app1-kv-secrets
               key: redis-connection
+        
+        # Mount secrets as files (optional)
+        volumeMounts:
+        - name: secrets-store
+          mountPath: "/mnt/secrets-store"
+          readOnly: true
+      
+      volumes:
+      - name: secrets-store
+        csi:
+          driver: secrets-store.csi.k8s.io
+          readOnly: true
+          volumeAttributes:
+            secretProviderClass: "app1-secrets"
+```
+
+**Key Benefits of Workload Identity:**
+- ✅ **No credentials in Kubernetes**: Service account uses federated identity
+- ✅ **No managed identity on nodes**: More secure than node-level identity
+- ✅ **Pod-level identity**: Each pod gets its own identity
+- ✅ **Automatic token refresh**: Azure AD tokens refreshed automatically
+- ✅ **Audit trail**: All Key Vault access logged with pod identity
+- ✅ **Zero secrets in Git**: No credentials anywhere in code or manifests
+
+**How Workload Identity Works:**
+
+```mermaid
+sequenceDiagram
+    participant Pod as App Pod
+    participant SA as Kubernetes SA<br/>(app1-sa)
+    participant Webhook as Workload Identity<br/>Webhook
+    participant AAD as Azure AD
+    participant KV as Azure Key Vault
+    
+    Note over Pod,SA: 1. Pod starts with ServiceAccount
+    Pod->>Webhook: Request projected token
+    Webhook->>AAD: Exchange K8s token for Azure AD token<br/>(using federated credential)
+    AAD->>Webhook: Azure AD access token
+    Webhook->>Pod: Inject token as env var
+    
+    Note over Pod,KV: 2. Pod accesses Key Vault
+    Pod->>KV: Get secret (with Azure AD token)
+    KV->>AAD: Validate token
+    AAD->>KV: Token valid for identity
+    KV->>Pod: Return secret value
+    
+    Note over Pod: 3. Secret available as env var
 ```
 
 ---
