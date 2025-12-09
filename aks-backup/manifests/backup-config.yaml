@@ -1,0 +1,141 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-config
+  namespace: azure-backup
+  labels:
+    app: azure-backup
+    component: configuration
+data:
+  backup-config.yaml: |
+    # AKS Backup Configuration
+    # This configures which namespaces and resources to backup
+    
+    # Namespaces to include in backup
+    # Leave empty to backup all namespaces (except excluded ones)
+    includedNamespaces:
+      - production
+      - staging
+      - databases
+    
+    # Namespaces to exclude from backup
+    excludedNamespaces:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+      - azure-backup
+      - dev-sandbox
+      - temp
+    
+    # Resource types to include
+    # By default, all standard Kubernetes resources are included
+    includedResources:
+      - deployments
+      - statefulsets
+      - services
+      - configmaps
+      - secrets
+      - persistentvolumeclaims
+      - ingresses
+      - customresourcedefinitions
+    
+    # Resource types to exclude
+    excludedResources:
+      - events
+      - pods  # Pods are ephemeral, backed up via controllers
+    
+    # Label selector for resources to backup
+    # Only resources matching these labels will be backed up
+    labelSelector:
+      matchLabels:
+        backup: "enabled"
+      # matchExpressions:
+      #   - key: environment
+      #     operator: In
+      #     values:
+      #       - production
+      #       - staging
+    
+    # Hooks for pre/post backup actions
+    hooks:
+      # Pre-backup hooks (run before backup starts)
+      pre:
+        - name: database-quiesce
+          namespace: databases
+          container: postgres
+          command:
+            - /bin/sh
+            - -c
+            - pg_dump -U postgres -F c -f /backup/dump.sql
+          onError: Continue  # Options: Continue, Fail
+          timeout: 5m
+      
+      # Post-backup hooks (run after backup completes)
+      post:
+        - name: database-resume
+          namespace: databases
+          container: postgres
+          command:
+            - /bin/sh
+            - -c
+            - echo "Backup complete"
+          timeout: 1m
+    
+    # Backup retention overrides
+    # These override the policy-level retention settings
+    retentionPolicy:
+      daily:
+        count: 7
+      weekly:
+        count: 4
+      monthly:
+        count: 12
+    
+    # Volume snapshot settings
+    volumeSnapshots:
+      # Create snapshots for persistent volumes
+      enabled: true
+      
+      # Snapshot class to use (optional)
+      # snapshotClassName: azure-disk-snapshot
+      
+      # Timeout for snapshot creation
+      timeout: 10m
+    
+    # Backup validation
+    validation:
+      # Verify backup integrity after completion
+      enabled: true
+      
+      # Checksum algorithm
+      algorithm: SHA256
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-labels
+  namespace: azure-backup
+  labels:
+    app: azure-backup
+    component: configuration
+data:
+  # Labels to apply to backup resources
+  backup-labels.yaml: |
+    # These labels are applied to all backup-related resources
+    common:
+      managed-by: azure-backup
+      backup-solution: aks-backup
+      environment: production
+    
+    # Labels for specific backup types
+    daily:
+      backup-frequency: daily
+      retention: 7d
+    
+    weekly:
+      backup-frequency: weekly
+      retention: 4w
+    
+    monthly:
+      backup-frequency: monthly
+      retention: 12m

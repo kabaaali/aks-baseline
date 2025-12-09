@@ -1,0 +1,63 @@
+# Example Terraform variables file for AKS Backup
+# Copy this file to terraform.tfvars and update with your values
+
+# Resource Group Configuration
+backup_resource_group_name = "rg-aks-backup"
+location                   = "australiaeast"  # Match your AKS cluster region
+
+# Existing AKS Cluster Details
+aks_cluster_name        = "aks-automatic-prod"  # Your AKS cluster name
+aks_resource_group_name = "rg-aks-prod"         # Resource group containing your AKS cluster
+
+# Backup Vault Configuration
+backup_vault_name = "bv-aks-backup"
+
+# Storage Account Configuration
+# IMPORTANT: Must be globally unique (3-24 lowercase alphanumeric characters)
+backup_storage_account_name = "staksbackup12345"  # Change this to be unique
+
+# Redundancy Settings
+vault_redundancy   = "GeoRedundant"  # Options: GeoRedundant, LocallyRedundant
+storage_redundancy = "GRS"           # Options: GRS, LRS, ZRS, GZRS
+
+# Backup Policies
+enable_hourly_backup = false  # Set to true for critical workloads (higher cost)
+
+# Namespace Configuration
+# Leave empty to backup all namespaces (except excluded ones)
+backup_namespaces = [
+  # "production",
+  # "staging",
+  # "databases"
+]
+
+# Namespaces to exclude from backup
+exclude_namespaces = [
+  "kube-system",
+  "kube-public",
+  "kube-node-lease",
+  "azure-backup",
+  "dev-sandbox",  # Add your dev/test namespaces here
+  "temp"
+]
+
+# Retention Configuration
+backup_retention_days = 7  # Default retention for daily backups
+
+# Advanced Settings
+enable_soft_delete         = true   # 14-day soft delete for deleted backups
+enable_cross_region_restore = true  # Enable DR to paired region
+enable_diagnostic_logs     = true   # Send logs to Log Analytics
+
+# Optional: Log Analytics Workspace for Diagnostics
+# log_analytics_workspace_id = "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<workspace-name>"
+
+# Tags
+tags = {
+  Environment = "Production"
+  ManagedBy   = "Terraform"
+  Purpose     = "AKS-Backup"
+  Team        = "Platform-Engineering"
+  CostCenter  = "IT-Infrastructure"
+  Compliance  = "Required"
+}
