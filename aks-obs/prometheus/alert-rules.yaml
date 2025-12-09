@@ -1,0 +1,276 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aks-prometheus-alert-rules
+  namespace: kube-system
+  labels:
+    app: prometheus
+    component: alert-rules
+data:
+  alert-rules.yaml: |
+    groups:
+      # Layer 1: Cluster Capacity & Health Alerts
+      - name: cluster_capacity_alerts
+        interval: 30s
+        rules:
+          - alert: ClusterCPUCommitHigh
+            expr: sum(kube_pod_container_resource_requests{resource="cpu"}) / sum(kube_node_status_allocatable{resource="cpu"}) * 100 > 80
+            for: 5m
+            labels:
+              severity: warning
+              layer: capacity
+            annotations:
+              summary: "Cluster CPU commit percentage is high"
+              description: "Cluster CPU commit is at {{ $value | humanize }}%. Cluster Autoscaler should scale up soon. If it reaches 100%, new pods will be Pending."
+          
+          - alert: ClusterCPUCommitCritical
+            expr: sum(kube_pod_container_resource_requests{resource="cpu"}) / sum(kube_node_status_allocatable{resource="cpu"}) * 100 > 95
+            for: 2m
+            labels:
+              severity: critical
+              layer: capacity
+            annotations:
+              summary: "Cluster CPU commit percentage is critical"
+              description: "Cluster CPU commit is at {{ $value | humanize }}%. New pods may not be schedulable!"
+          
+          - alert: ClusterMemoryCommitHigh
+            expr: sum(kube_pod_container_resource_requests{resource="memory"}) / sum(kube_node_status_allocatable{resource="memory"}) * 100 > 80
+            for: 5m
+            labels:
+              severity: warning
+              layer: capacity
+            annotations:
+              summary: "Cluster Memory commit percentage is high"
+              description: "Cluster Memory commit is at {{ $value | humanize }}%. Cluster Autoscaler should scale up soon."
+          
+          - alert: ClusterMemoryCommitCritical
+            expr: sum(kube_pod_container_resource_requests{resource="memory"}) / sum(kube_node_status_allocatable{resource="memory"}) * 100 > 95
+            for: 2m
+            labels:
+              severity: critical
+              layer: capacity
+            annotations:
+              summary: "Cluster Memory commit percentage is critical"
+              description: "Cluster Memory commit is at {{ $value | humanize }}%. New pods may not be schedulable!"
+          
+          - alert: PodsInPendingState
+            expr: sum(kube_pod_status_phase{phase="Pending"}) > 0
+            for: 5m
+            labels:
+              severity: warning
+              layer: capacity
+            annotations:
+              summary: "Pods stuck in Pending state"
+              description: "{{ $value }} pod(s) have been in Pending state for more than 5 minutes. Check for capacity issues or unschedulable taints."
+          
+          - alert: NodeNotReady
+            expr: sum(kube_node_status_condition{condition="Ready",status="false"}) > 0
+            for: 2m
+            labels:
+              severity: critical
+              layer: capacity
+            annotations:
+              summary: "Node(s) not ready"
+              description: "{{ $value }} node(s) are not in Ready state. Cluster capacity may be reduced."
+
+      # Layer 2: Node & Infrastructure Alerts
+      - name: node_infrastructure_alerts
+        interval: 30s
+        rules:
+          - alert: NodeMemoryPressure
+            expr: kube_node_status_condition{condition="MemoryPressure",status="true"} == 1
+            for: 2m
+            labels:
+              severity: critical
+              layer: infrastructure
+            annotations:
+              summary: "Node {{ $labels.node }} under memory pressure"
+              description: "Node {{ $labels.node }} is under memory pressure. Kubernetes may start evicting pods."
+          
+          - alert: NodeDiskPressure
+            expr: kube_node_status_condition{condition="DiskPressure",status="true"} == 1
+            for: 2m
+            labels:
+              severity: critical
+              layer: infrastructure
+            annotations:
+              summary: "Node {{ $labels.node }} under disk pressure"
+              description: "Node {{ $labels.node }} is under disk pressure. Kubernetes may start evicting pods."
+          
+          - alert: NodePIDPressure
+            expr: kube_node_status_condition{condition="PIDPressure",status="true"} == 1
+            for: 2m
+            labels:
+              severity: warning
+              layer: infrastructure
+            annotations:
+              summary: "Node {{ $labels.node }} under PID pressure"
+              description: "Node {{ $labels.node }} is running out of process IDs."
+          
+          - alert: NodeDiskSpaceHigh
+            expr: (1 - (node_filesystem_avail_bytes{mountpoint=~"/|/var/lib/docker|/var/log"} / node_filesystem_size_bytes{mountpoint=~"/|/var/lib/docker|/var/log"})) * 100 > 85
+            for: 5m
+            labels:
+              severity: warning
+              layer: infrastructure
+            annotations:
+              summary: "Node disk space usage high"
+              description: "Node {{ $labels.instance }} mountpoint {{ $labels.mountpoint }} is {{ $value | humanize }}% full."
+          
+          - alert: NodeDiskSpaceCritical
+            expr: (1 - (node_filesystem_avail_bytes{mountpoint=~"/|/var/lib/docker|/var/log"} / node_filesystem_size_bytes{mountpoint=~"/|/var/lib/docker|/var/log"})) * 100 > 95
+            for: 2m
+            labels:
+              severity: critical
+              layer: infrastructure
+            annotations:
+              summary: "Node disk space critically low"
+              description: "Node {{ $labels.instance }} mountpoint {{ $labels.mountpoint }} is {{ $value | humanize }}% full. Node may become unusable!"
+          
+          - alert: NodeInodesUsageHigh
+            expr: (1 - (node_filesystem_files_free{mountpoint="/"} / node_filesystem_files{mountpoint="/"})) * 100 > 85
+            for: 5m
+            labels:
+              severity: warning
+              layer: infrastructure
+            annotations:
+              summary: "Node inodes usage high"
+              description: "Node {{ $labels.instance }} inodes usage is {{ $value | humanize }}%. Running out of inodes will make the node unusable."
+          
+          - alert: NodeHighCPUUsage
+            expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+            for: 10m
+            labels:
+              severity: warning
+              layer: infrastructure
+            annotations:
+              summary: "Node CPU usage high"
+              description: "Node {{ $labels.instance }} CPU usage is {{ $value | humanize }}% for more than 10 minutes."
+          
+          - alert: NodeHighMemoryUsage
+            expr: ((node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes) * 100 > 80
+            for: 10m
+            labels:
+              severity: warning
+              layer: infrastructure
+            annotations:
+              summary: "Node memory usage high"
+              description: "Node {{ $labels.instance }} memory usage is {{ $value | humanize }}% for more than 10 minutes."
+
+      # Layer 3: Workload & Pod Health Alerts
+      - name: workload_pod_health_alerts
+        interval: 30s
+        rules:
+          - alert: PodCrashLooping
+            expr: rate(kube_pod_container_status_restarts_total[15m]) > 0.05
+            for: 5m
+            labels:
+              severity: critical
+              layer: workload
+            annotations:
+              summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash looping"
+              description: "Container {{ $labels.container }} in pod {{ $labels.namespace }}/{{ $labels.pod }} is restarting frequently. Check logs for errors."
+          
+          - alert: PodOOMKilled
+            expr: increase(kube_pod_container_status_terminated_reason{reason="OOMKilled"}[5m]) > 0
+            for: 1m
+            labels:
+              severity: critical
+              layer: workload
+            annotations:
+              summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} was OOMKilled"
+              description: "Container {{ $labels.container }} in pod {{ $labels.namespace }}/{{ $labels.pod }} was killed due to out of memory. Increase memory limits or investigate memory leak."
+          
+          - alert: ContainerCPUThrottlingHigh
+            expr: sum by (namespace, pod, container) (rate(container_cpu_cfs_throttled_seconds_total{container!=""}[5m])) > 0.25
+            for: 10m
+            labels:
+              severity: warning
+              layer: workload
+            annotations:
+              summary: "Container {{ $labels.namespace }}/{{ $labels.pod }}/{{ $labels.container }} experiencing high CPU throttling"
+              description: "Container is being throttled {{ $value | humanizePercentage }} of the time. This causes performance degradation. Consider increasing CPU limits."
+          
+          - alert: DeploymentReplicasMismatch
+            expr: kube_deployment_spec_replicas != kube_deployment_status_replicas_available
+            for: 10m
+            labels:
+              severity: warning
+              layer: workload
+            annotations:
+              summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} replicas mismatch"
+              description: "Deployment has {{ $value }} available replicas but expects {{ $labels.spec_replicas }}. Check for pod scheduling issues."
+          
+          - alert: PodNotReady
+            expr: sum by (namespace, pod) (kube_pod_status_phase{phase!~"Running|Succeeded"}) > 0
+            for: 15m
+            labels:
+              severity: warning
+              layer: workload
+            annotations:
+              summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} not ready"
+              description: "Pod has been in {{ $labels.phase }} state for more than 15 minutes."
+
+      # Layer 4: Network & Storage Alerts
+      - name: network_storage_alerts
+        interval: 30s
+        rules:
+          - alert: NetworkPacketDropsHigh
+            expr: rate(node_network_receive_drop_total[5m]) > 100 or rate(node_network_transmit_drop_total[5m]) > 100
+            for: 5m
+            labels:
+              severity: warning
+              layer: network
+            annotations:
+              summary: "High network packet drops on {{ $labels.instance }}"
+              description: "Network interface {{ $labels.device }} on {{ $labels.instance }} is dropping {{ $value | humanize }} packets/sec. May indicate CNI issues or VM limits."
+          
+          - alert: PersistentVolumeUsageHigh
+            expr: (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) * 100 > 85
+            for: 5m
+            labels:
+              severity: warning
+              layer: storage
+            annotations:
+              summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} usage high"
+              description: "Persistent volume is {{ $value | humanize }}% full. Consider expanding the volume or cleaning up data."
+          
+          - alert: PersistentVolumeUsageCritical
+            expr: (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) * 100 > 95
+            for: 2m
+            labels:
+              severity: critical
+              layer: storage
+            annotations:
+              summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} critically full"
+              description: "Persistent volume is {{ $value | humanize }}% full. Database or application may crash if volume fills completely!"
+          
+          - alert: CoreDNSLatencyHigh
+            expr: histogram_quantile(0.99, sum(rate(coredns_dns_request_duration_seconds_bucket[5m])) by (le, server)) > 0.1
+            for: 5m
+            labels:
+              severity: warning
+              layer: network
+            annotations:
+              summary: "CoreDNS latency high"
+              description: "CoreDNS P99 latency is {{ $value | humanizeDuration }}. High DNS latency affects all service-to-service communication."
+          
+          - alert: CoreDNSErrorRateHigh
+            expr: sum(rate(coredns_dns_responses_total{rcode=~"SERVFAIL|NXDOMAIN"}[5m])) by (server) / sum(rate(coredns_dns_requests_total[5m])) by (server) > 0.05
+            for: 5m
+            labels:
+              severity: warning
+              layer: network
+            annotations:
+              summary: "CoreDNS error rate high"
+              description: "CoreDNS on {{ $labels.server }} has {{ $value | humanizePercentage }} error rate. Check CoreDNS logs and upstream DNS configuration."
+          
+          - alert: NetworkErrorsHigh
+            expr: rate(node_network_receive_errs_total[5m]) > 10 or rate(node_network_transmit_errs_total[5m]) > 10
+            for: 5m
+            labels:
+              severity: warning
+              layer: network
+            annotations:
+              summary: "High network errors on {{ $labels.instance }}"
+              description: "Network interface {{ $labels.device }} on {{ $labels.instance }} has {{ $value | humanize }} errors/sec."

@@ -1,0 +1,30 @@
+# Example Terraform variables file
+# Copy this file to terraform.tfvars and update with your values
+
+# Resource Group Configuration
+resource_group_name = "rg-aks-observability"
+location            = "australiaeast"  # Change to your preferred region
+
+# Existing AKS Cluster Details
+aks_cluster_name         = "aks-automatic-prod"      # Your AKS cluster name
+aks_resource_group_name  = "rg-aks-prod"             # Resource group containing your AKS cluster
+
+# Observability Resource Names
+prometheus_workspace_name = "amw-aks-prometheus"
+grafana_name             = "grafana-aks-observability"
+
+# Grafana Configuration
+grafana_zone_redundancy = false  # Set to true for Premium SKU with zone redundancy
+
+# Alert Configuration
+enable_alert_rules         = true
+alert_notification_email   = "ops-team@example.com"  # Optional: email for alert notifications
+
+# Tags
+tags = {
+  Environment = "Production"
+  ManagedBy   = "Terraform"
+  Purpose     = "AKS-Observability"
+  Team        = "Platform-Engineering"
+  CostCenter  = "IT-Infrastructure"
+}

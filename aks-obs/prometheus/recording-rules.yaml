@@ -1,0 +1,172 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aks-prometheus-recording-rules
+  namespace: kube-system
+  labels:
+    app: prometheus
+    component: recording-rules
+data:
+  recording-rules.yaml: |
+    groups:
+      # Cluster-level aggregations for dashboard performance
+      - name: cluster_capacity_recordings
+        interval: 30s
+        rules:
+          # Cluster CPU Commit Percentage
+          - record: cluster:cpu_commit_percentage
+            expr: sum(kube_pod_container_resource_requests{resource="cpu"}) / sum(kube_node_status_allocatable{resource="cpu"}) * 100
+          
+          # Cluster Memory Commit Percentage
+          - record: cluster:memory_commit_percentage
+            expr: sum(kube_pod_container_resource_requests{resource="memory"}) / sum(kube_node_status_allocatable{resource="memory"}) * 100
+          
+          # Cluster CPU Usage Percentage
+          - record: cluster:cpu_usage_percentage
+            expr: sum(rate(container_cpu_usage_seconds_total{container!=""}[5m])) / sum(kube_node_status_allocatable{resource="cpu"}) * 100
+          
+          # Cluster Memory Usage Percentage
+          - record: cluster:memory_usage_percentage
+            expr: sum(container_memory_working_set_bytes{container!=""}) / sum(kube_node_status_allocatable{resource="memory"}) * 100
+          
+          # Total Ready Nodes
+          - record: cluster:nodes_ready_count
+            expr: sum(kube_node_status_condition{condition="Ready",status="true"})
+          
+          # Total Not Ready Nodes
+          - record: cluster:nodes_not_ready_count
+            expr: sum(kube_node_status_condition{condition="Ready",status="false"})
+          
+          # Pending Pods Count
+          - record: cluster:pods_pending_count
+            expr: sum(kube_pod_status_phase{phase="Pending"})
+
+      # Node-level aggregations
+      - name: node_infrastructure_recordings
+        interval: 30s
+        rules:
+          # Node CPU Usage by Instance
+          - record: node:cpu_usage_percentage:instance
+            expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+          
+          # Node Memory Usage by Instance
+          - record: node:memory_usage_percentage:instance
+            expr: ((node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes) * 100
+          
+          # Node Disk Space Usage by Instance and Mountpoint
+          - record: node:disk_usage_percentage:instance_mountpoint
+            expr: (1 - (node_filesystem_avail_bytes / node_filesystem_size_bytes)) * 100
+          
+          # Node Inodes Usage by Instance
+          - record: node:inodes_usage_percentage:instance
+            expr: (1 - (node_filesystem_files_free{mountpoint="/"} / node_filesystem_files{mountpoint="/"})) * 100
+          
+          # Node Disk I/O Rate
+          - record: node:disk_io_rate:instance_device
+            expr: rate(node_disk_io_time_seconds_total[5m])
+          
+          # Node Network RX Rate
+          - record: node:network_receive_bytes:instance_device
+            expr: rate(node_network_receive_bytes_total[5m])
+          
+          # Node Network TX Rate
+          - record: node:network_transmit_bytes:instance_device
+            expr: rate(node_network_transmit_bytes_total[5m])
+
+      # Workload-level aggregations
+      - name: workload_pod_health_recordings
+        interval: 30s
+        rules:
+          # Container Restart Rate by Namespace, Pod, Container
+          - record: workload:container_restart_rate:namespace_pod_container
+            expr: rate(kube_pod_container_status_restarts_total[5m])
+          
+          # CPU Throttling Rate by Namespace, Pod, Container
+          - record: workload:cpu_throttling_rate:namespace_pod_container
+            expr: sum by (namespace, pod, container) (rate(container_cpu_cfs_throttled_seconds_total{container!=""}[5m]))
+          
+          # OOMKill Count by Namespace, Pod, Container
+          - record: workload:oomkill_count:namespace_pod_container
+            expr: sum by (namespace, pod, container) (increase(kube_pod_container_status_terminated_reason{reason="OOMKilled"}[5m]))
+          
+          # Deployment Replica Availability
+          - record: workload:deployment_replicas_available:namespace_deployment
+            expr: kube_deployment_status_replicas_available / kube_deployment_spec_replicas
+          
+          # Pod Phase Count by Namespace
+          - record: workload:pod_phase_count:namespace_phase
+            expr: sum by (namespace, phase) (kube_pod_status_phase)
+          
+          # Container CPU Usage by Namespace, Pod, Container
+          - record: workload:container_cpu_usage:namespace_pod_container
+            expr: sum by (namespace, pod, container) (rate(container_cpu_usage_seconds_total{container!=""}[5m]))
+          
+          # Container Memory Usage by Namespace, Pod, Container
+          - record: workload:container_memory_usage:namespace_pod_container
+            expr: sum by (namespace, pod, container) (container_memory_working_set_bytes{container!=""})
+
+      # Network and Storage aggregations
+      - name: network_storage_recordings
+        interval: 30s
+        rules:
+          # Network Packet Drop Rate
+          - record: network:packet_drop_rate:instance_device
+            expr: rate(node_network_receive_drop_total[5m]) + rate(node_network_transmit_drop_total[5m])
+          
+          # Network Error Rate
+          - record: network:error_rate:instance_device
+            expr: rate(node_network_receive_errs_total[5m]) + rate(node_network_transmit_errs_total[5m])
+          
+          # PV Usage Percentage
+          - record: storage:pv_usage_percentage:namespace_pvc
+            expr: (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes) * 100
+          
+          # PV Available Bytes
+          - record: storage:pv_available_bytes:namespace_pvc
+            expr: kubelet_volume_stats_available_bytes
+          
+          # CoreDNS Request Rate
+          - record: network:coredns_request_rate:server
+            expr: sum by (server) (rate(coredns_dns_requests_total[5m]))
+          
+          # CoreDNS Error Rate
+          - record: network:coredns_error_rate:server
+            expr: sum by (server) (rate(coredns_dns_responses_total{rcode=~"SERVFAIL|NXDOMAIN"}[5m]))
+          
+          # CoreDNS P99 Latency
+          - record: network:coredns_latency_p99:server
+            expr: histogram_quantile(0.99, sum by (le, server) (rate(coredns_dns_request_duration_seconds_bucket[5m])))
+          
+          # CoreDNS P95 Latency
+          - record: network:coredns_latency_p95:server
+            expr: histogram_quantile(0.95, sum by (le, server) (rate(coredns_dns_request_duration_seconds_bucket[5m])))
+          
+          # CoreDNS P50 Latency
+          - record: network:coredns_latency_p50:server
+            expr: histogram_quantile(0.50, sum by (le, server) (rate(coredns_dns_request_duration_seconds_bucket[5m])))
+
+      # Resource efficiency metrics
+      - name: resource_efficiency_recordings
+        interval: 60s
+        rules:
+          # CPU Request vs Usage Ratio (Over-provisioning indicator)
+          - record: efficiency:cpu_request_vs_usage_ratio:namespace_pod
+            expr: |
+              sum by (namespace, pod) (kube_pod_container_resource_requests{resource="cpu"}) 
+              / 
+              (sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{container!=""}[5m])) + 0.001)
+          
+          # Memory Request vs Usage Ratio (Over-provisioning indicator)
+          - record: efficiency:memory_request_vs_usage_ratio:namespace_pod
+            expr: |
+              sum by (namespace, pod) (kube_pod_container_resource_requests{resource="memory"}) 
+              / 
+              (sum by (namespace, pod) (container_memory_working_set_bytes{container!=""}) + 1)
+          
+          # Cluster CPU Waste (Committed but not used)
+          - record: efficiency:cluster_cpu_waste_percentage
+            expr: cluster:cpu_commit_percentage - cluster:cpu_usage_percentage
+          
+          # Cluster Memory Waste (Committed but not used)
+          - record: efficiency:cluster_memory_waste_percentage
+            expr: cluster:memory_commit_percentage - cluster:memory_usage_percentage
