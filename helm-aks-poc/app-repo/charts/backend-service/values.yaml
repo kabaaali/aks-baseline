@@ -1,0 +1,35 @@
+# Values for backend-service
+# Overriding values from the 'base-service' dependency
+
+base-service:
+  replicaCount: 2
+  
+  image:
+    repository: myacr.azurecr.io/backend-service
+    tag: "v1.0.0"
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - host: backend.api.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10

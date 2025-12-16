@@ -1,0 +1,48 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: microservices-appset
+  namespace: argocd
+spec:
+  generators:
+  - list:
+      elements:
+      - env: dev
+        cluster: https://kubernetes.default.svc
+      - env: prod
+        cluster: https://kubernetes.default.svc
+        # In real life, prod would be a different cluster URL
+  
+  template:
+    metadata:
+      name: '{{env}}-backend-service'
+    spec:
+      project: default
+      source:
+        repoURL: myacr.azurecr.io/helm
+        chart: backend-service
+        targetRevision: 0.1.0 # This should be updated by CI/CD
+        helm:
+          valueFiles:
+          - values.yaml
+          # We might load values from the GitOps repo instead of the chart itself
+          # using 'valuesObject' or by having a separate source for values.
+          # Here is the pattern where values come from Git:
+      sources:
+      - repoURL: myacr.azurecr.io/helm
+        chart: backend-service
+        targetRevision: 0.1.0
+      - repoURL: https://github.com/Start-Making-Changes/my-gitops-repo.git
+        targetRevision: HEAD
+        path: helm-aks-poc/gitops/env/{{env}}
+      
+      destination:
+        server: '{{cluster}}'
+        namespace: '{{env}}-apps'
+      
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

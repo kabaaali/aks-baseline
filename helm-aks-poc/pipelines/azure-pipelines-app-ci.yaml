@@ -1,0 +1,54 @@
+trigger:
+  branches:
+    include:
+    - main
+  paths:
+    include:
+    - helm-aks-poc/app-repo/*
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  acrName: 'myacr'
+  imageRepository: 'backend-service'
+  tag: '$(Build.BuildId)'
+
+steps:
+- task: HelmInstaller@0
+  displayName: 'Install Helm'
+  inputs:
+    helmVersion: '3.13.0'
+
+- task: Docker@2
+  displayName: 'Build and Push Docker Image'
+  inputs:
+    containerRegistry: 'MyACRConnection'
+    repository: '$(imageRepository)'
+    command: 'buildAndPush'
+    Dockerfile: 'helm-aks-poc/app-repo/src/Dockerfile'
+    tags: |
+      $(tag)
+      latest
+
+- task: AzureCLI@2
+  displayName: 'Publish App Helm Chart'
+  inputs:
+    azureSubscription: 'MyAzureConnection'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az acr login --name $(acrName)
+      
+      cd helm-aks-poc/app-repo/charts/backend-service
+      
+      # In real world, we need to login to OCI to pull the base chart
+      # helm dependency update .
+      
+      # Package the chart
+      # We update the AppVersion to match the Docker tag we just built
+      sed -i 's/appVersion: ".*"/appVersion: "$(tag)"/' Chart.yaml
+      
+      helm lint .
+      helm package .
+      helm push backend-service-*.tgz oci://$(acrName).azurecr.io/helm

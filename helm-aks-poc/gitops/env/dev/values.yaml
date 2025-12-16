@@ -1,0 +1,9 @@
+# Values for DEV environment
+base-service:
+  replicaCount: 1
+  ingress:
+    hosts:
+      - host: dev.api.example.com
+        paths:
+          - path: /
+            pathType: Prefix

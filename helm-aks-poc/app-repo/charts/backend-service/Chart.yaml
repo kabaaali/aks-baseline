@@ -1,0 +1,13 @@
+apiVersion: v2
+name: backend-service
+description: A Helm chart for the Backend Service, inheriting from base-service
+type: application
+version: 0.1.0
+appVersion: "1.16.0"
+dependencies:
+  - name: base-service
+    version: 1.0.0
+    # In a real environment, this would be an OCI URL
+    # repository: oci://myacr.azurecr.io/helm
+    # For local POC validation, we use the relative path
+    repository: file://../../../platform-repo/charts/base-service

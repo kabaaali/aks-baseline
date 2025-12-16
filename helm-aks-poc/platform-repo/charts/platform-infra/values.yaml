@@ -1,0 +1,14 @@
+# Values for platform-infra
+# Configures the 'redis' subchart
+
+redis:
+  auth:
+    enabled: false
+  
+  architecture: standalone
+  
+  master:
+    persistence:
+      enabled: false 
+      # For POC we use ephemeral storage. 
+      # In Prod, set enabled: true and storageClass: managed-csi

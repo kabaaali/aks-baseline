@@ -1,0 +1,54 @@
+trigger:
+  branches:
+    include:
+    - main
+  paths:
+    include:
+    - helm-aks-poc/platform-repo/charts/*
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  # TODO: Replace with your ACR name
+  acrName: 'myacr'
+  imageRepository: 'helm'
+
+steps:
+- task: HelmInstaller@0
+  displayName: 'Install Helm'
+  inputs:
+    helmVersion: '3.13.0'
+
+- task: AzureCLI@2
+  displayName: 'Login to ACR'
+  inputs:
+    azureSubscription: 'MyAzureConnection'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az acr login --name $(acrName)
+
+- task: Bash@3
+  displayName: 'Lint and Push Base Service Chart'
+  inputs:
+    targetType: 'inline'
+    script: |
+      cd helm-aks-poc/platform-repo/charts/base-service
+      helm lint .
+      helm package .
+      helm push base-service-*.tgz oci://$(acrName).azurecr.io/$(imageRepository)
+
+- task: Bash@3
+  displayName: 'Lint and Push Platform Infra Chart'
+  inputs:
+    targetType: 'inline'
+    script: |
+      cd helm-aks-poc/platform-repo/charts/platform-infra
+      
+      # Update dependencies (needs OCI or repo add)
+      # helm dependency update . 
+      
+      helm lint .
+      helm package .
+      helm push platform-infra-*.tgz oci://$(acrName).azurecr.io/$(imageRepository)
