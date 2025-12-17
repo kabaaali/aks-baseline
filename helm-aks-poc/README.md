@@ -68,6 +68,7 @@ kubectl apply -f gitops/bootstrap/root-app.yaml
 ## Key Files to Review
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): Detailed design flow.
+- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md): **Start Here** if you are an App Engineer. Simpler explanation of files and workflows.
 - `platform-repo/charts/base-service/templates/`: The reusable K8s manifest templates.
 - `app-repo/charts/backend-service/values.yaml`: How an app consumes the base chart.
 - `pipelines/`: Azure DevOps YAML definitions.
