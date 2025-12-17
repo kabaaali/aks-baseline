@@ -15,19 +15,19 @@ This document outlines the architectural approach for deploying microservices an
 
 ```mermaid
 graph TD
-    subgraph "CI - Azure DevOps"
+    subgraph CI["CI - Azure DevOps"]
         Dev[Developer] -->|Push Code| AppRepo[App Repository]
         AppRepo -->|Trigger| PL_Build[Pipeline: Build & Publish]
         PL_Build -->|Push Image| ACR_Img[ACR: Container Images]
-        PL_Build -->|Push Chart| ACR_Chart[ACR: Helm Charts (OCI)]
+        PL_Build -->|Push Chart| ACR_Chart["ACR: Helm Charts (OCI)"]
     end
 
-    subgraph "CD - GitOps"
+    subgraph CD["CD - GitOps"]
         PL_Build -->|Update Version| GitOpsRepo[GitOps Repository]
         GitOpsRepo -->|Manifests| EnvCfg[Environment Config]
     end
 
-    subgraph "Cluster - AKS Automatic"
+    subgraph Cluster["Cluster - AKS Automatic"]
         ArgoCD[Argo CD Controller] -->|Watch| GitOpsRepo
         ArgoCD -->|Pull Chart| ACR_Chart
         ArgoCD -->|Pull Image| ACR_Img
