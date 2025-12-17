@@ -101,6 +101,8 @@ When the pipeline runs, it performs a **Composition** (not a Git merge):
 *   **Simplicity**: You don't see the complexity of the underlying YAMLs, just the settings you care about.
 *   **Stability**: You can trust that the base structure is tested and valid.
 
+> **Want more detail?** check out the [Helm Mechanics Deep Dive](HELM_MECHANICS_DEEP_DIVE.md) for the exact algorithms on OCI, Digest pinning, and Values coalescing.
+
 ---
 
 ## 6. How Debugging Works
