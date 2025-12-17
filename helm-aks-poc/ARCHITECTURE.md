@@ -140,3 +140,34 @@ The base chart abstracts complex K8s logic.
 4.  `helm push` to `oci://<acr>/helm/my-app`.
 5.  **Trigger**: Updates GitOps Repo `image.tag` (automatic) or creates Pull Request.
 
+## Developer Workflow: "How do I make changes?"
+
+A common concern is that a centralized chart restricts developers. However, the **Wrapper Chart pattern** gives Application Engineers control at three levels:
+
+### Level 1: Configuration (Most Common)
+Developers change values in their own repo (`app-repo/charts/backend-service/values.yaml`).
+*   **Need**: "I need to add an environment variable."
+*   **Action**: Add it to `values.yaml`. The base chart respects standard values like `env`, `resources`, `replicas`.
+*   **Need**: "I need to change the port."
+*   **Action**: Update `service.port` in `values.yaml`.
+
+### Level 2: Extension (Common)
+Developers add *new* templates to their own chart. The Wrapper Chart is a full Helm chart.
+*   **Need**: "I need a specialized ConfigMap or a CronJob that isn't in the base chart."
+*   **Action**: Create `app-repo/charts/backend-service/templates/my-cronjob.yaml`.
+*   **Result**: The release enables BOTH the base deployment (via dependency) AND the new CronJob.
+
+### Level 3: Structural Changes (Rare)
+The base chart should expose "escape hatches" for advanced users.
+*   **Need**: "I need a sidecar container for logging."
+*   **Action**: The base chart should support an `extraContainers` value.
+    ```yaml
+    # app-repo/values.yaml
+    base-service:
+      extraContainers:
+        - name: log-sidecar
+          image: busybox
+    ```
+*   **If not supported**: Open a Pull Request to `platform-repo` to update the Base Chart. This benefits *all* teams.
+
+
