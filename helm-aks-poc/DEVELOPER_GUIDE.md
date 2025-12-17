@@ -78,7 +78,32 @@ The `base-service` covers 90% of use cases (Web App / API). If you need somethin
 
 ---
 
-## 4. How Debugging Works
+## 5. Behind the Scenes: How Your Changes are Merged
+
+You might wonder: *"How does my little `values.yaml` become a full Kubernetes deployment?"*
+
+### The "Base Chart" Concept
+The Platform Team manages a **Base Chart** (stored as an OCI Artifact in ACR). Think of this as a locked, read-only template that contains all the complex logic for Deployments, Security, and Networking.
+
+### The "Merge" Process
+When the pipeline runs, it performs a **Composition** (not a Git merge):
+
+1.  **Fetch**: It downloads the immutable Base Chart from the registry (ACR) using OCI (similar to pulling a Docker image).
+2.  **Layer**: It takes the **Default Values** from the Base Chart.
+3.  **Override**: It layers **Your Values** on top.
+    *   *Base says:* `replicas: 1`
+    *   *You say:* `replicas: 3`
+    *   *Result:* `replicas: 3`
+4.  **Render**: It generates the final Kubernetes manifests.
+
+### Why this is good for you
+*   **Security**: You get security updates automatically. If the Platform Team patches a vulnerability in the Base Chart, your next deployment inherits it instantly.
+*   **Simplicity**: You don't see the complexity of the underlying YAMLs, just the settings you care about.
+*   **Stability**: You can trust that the base structure is tested and valid.
+
+---
+
+## 6. How Debugging Works
 
 *   **"My build failed"**: Check Azure DevOps Pipelines. Usually a Docker build error or invalid YAML indentation.
 *   **"My deployment failed"**: Check Argo CD UI.
