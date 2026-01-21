@@ -2,7 +2,7 @@
 ## AKS Automatic Observability: Azure Managed vs. SaaS Platforms
 
 **Date:** January 21, 2026
-**Version:** 1.1
+**Version:** 1.2
 **Target Audience:** Principle Architects, Head of Engineering, Platform Engineering Leads
 
 ---
@@ -13,7 +13,7 @@ This paper evaluates two primary observability strategies for Azure Kubernetes S
 
 ### 1.1 Summary Comparison Table
 
-| Feature category | Azure Managed (Prometheus/Grafana) | SaaS (Dynatrace / Datadog / New Relic) |
+| Feature Category | Azure Managed (Prometheus/Grafana) | SaaS (Dynatrace / Datadog / New Relic) |
 | :--- | :--- | :--- |
 | **Primary Focus** | **Infrastructure & Platform.** Deep integration with AKS and Azure Resource Manager. | **Application & Business.** End-to-end transaction tracing, code-level profiling, and AI-driven root cause analysis. |
 | **Licensing Cost** | **Hybrid Model.** <br>1. **Metrics:** Consumption-based (very cheap).<br>2. **Grafana:** **Per-user license** (Standard plan) for active users. | **Node + Ingestion Model.** <br>1. **Host:** High cost per node (expensive for large clusters).<br>2. **Ingestion:** Cost per GB of logs/traces. |
@@ -107,6 +107,35 @@ Modern application observability is not just about "is the pod running?"—it is
 *   **Visibility:** SaaS platforms excel here. They visualize the entire chain automatically. A slow API call identifies exactly whether the latency was in the APIM Policy execution, the network hop, or the SQL query executed by the AKS pod.
     *   **Dynatrace:** Uses "PurePath" technology to automatically thread this context.
     *   **New Relic:** "Service Maps" automatically visualize the APIM node connected to the Kubernetes Deployment node.
+
+### 3.3 Deep Dive: The "Unified" Experience vs. Azure Fragmentation
+
+The user experience difference is architectural, not just cosmetic.
+
+#### **1. The Data Backend (The "Single Source" vs. "Federated")**
+*   **New Relic (Unified):** Uses **NRDB**, a single, massive, multi-tenant database for Metrics, Logs, Events, and Traces.
+    *   *Result:* When you query "Show me everything for Request ID X", the engine scans one place. You can instantly pivot from a Log line to a Trace span to a Kubernetes CPU metric because they share a unified schema and index.
+*   **Azure (Fragmented):**
+    *   Metrics $\rightarrow$ **Azure Monitor Workspace** (Prometheus).
+    *   Logs $\rightarrow$ **Log Analytics Workspace** (Kusto/ADX).
+    *   Traces $\rightarrow$ **Application Insights** (Classic or Workspace-based).
+    *   *Result:* Correlating "Process Crash" (Log) with "High Memory" (Metric) often requires cross-resource queries. Grafana bridges this, but the data underlying it lives in different silos, often causing latency or "disjointed" drill-down experiences.
+
+#### **2. The Workflow (The "Pivot")**
+*   **New Relic Flow:**
+    1.  Alert fires: "High Latency".
+    2.  Click Alert $\rightarrow$ Open Service Overview.
+    3.  Highlight the spike on the chart $\rightarrow$ **Contextual Sidebar opens automatically** showing Logs *only* from that timeframe and Traces *only* with high latency.
+    4.  Click a Trace $\rightarrow$ See the SQL query that caused it.
+    *   *Verdict:* Seamless. No tab switching.
+*   **Azure Flow:**
+    1.  Alert fires: "High Latency" (from Azure Monitor).
+    2.  Click Alert $\rightarrow$ Opens Azure Portal Alert blade.
+    3.  Click "View resources" $\rightarrow$ Go to Managed Grafana Dashboard (if built).
+    4.  See spike $\rightarrow$ Copy Timestamp.
+    5.  Open Application Insights $\rightarrow$ Go to "Performance" blade $\rightarrow$ Filter by time.
+    6.  Click "Drill into Samples" $\rightarrow$ Find a slow request.
+    *   *Verdict:* Functional, but high cognitive load due to context switching between Portal, Grafana, and Log Analytics.
 
 ---
 
