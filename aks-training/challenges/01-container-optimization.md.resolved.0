@@ -1,0 +1,39 @@
+# Challenge 1: The Container Diet
+
+**Scenario**: You have inherited a "Legacy App" from a previous team. It works, but the Security team has blocked it from deployment because:
+1.  The image is too large (> 800MB).
+2.  It runs as `root` (Security Risk!).
+3.  It installs packages at runtime.
+
+**Your Mission**: Refactor the [Dockerfile](file:///Users/rekhasunil/.gemini/antigravity/brain/5c9ba4eb-7e9e-46bc-b2ce-c9f2520ef6e3/aks-training/scenarios/00-legacy-app/Dockerfile) to meet strict Enterprise Standards.
+
+## The Starting Point
+Navigate to `scenarios/00-legacy-app`. You will see a [Dockerfile](file:///Users/rekhasunil/.gemini/antigravity/brain/5c9ba4eb-7e9e-46bc-b2ce-c9f2520ef6e3/aks-training/scenarios/00-legacy-app/Dockerfile) that violates several best practices.
+
+## Requirements (Win Conditions)
+1.  **Metric**: Image size must be under **200MB**.
+2.  **Security**: The container MUST NOT run as root.
+3.  **Performance**: Dependencies must be installed during build, not runtime.
+4.  **Base Image**: Use a specific tag (e.g., `python:3.9-slim`), not `latest` or generic `python:3.9`.
+
+## Hints
+*   **Multi-Stage Builds**: Use a builder stage to install dependencies and copy them to a runtime stage.
+*   **User**: Use `useradd` and `USER` instructions.
+*   **Pip**: Use `--no-cache-dir` to save space.
+
+## Validation
+Build your image:
+```bash
+docker build -t legacy-app:optimized .
+```
+
+Check size:
+```bash
+docker images | grep legacy-app
+```
+
+Check user:
+```bash
+docker run --rm legacy-app:optimized whoami
+# Should NOT return 'root'
+```

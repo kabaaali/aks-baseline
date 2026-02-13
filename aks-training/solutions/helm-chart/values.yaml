@@ -1,0 +1,36 @@
+replicaCount: 1
+
+image:
+  repository: myacr.azurecr.io/legacy-app
+  pullPolicy: IfNotPresent
+  tag: "" # Overridden by pipeline
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: "nginx"
+  hosts:
+    - host: legacy-app.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+livenessProbe:
+  httpGet:
+    path: /
+    port: 5000
+readinessProbe:
+  httpGet:
+    path: /
+    port: 5000

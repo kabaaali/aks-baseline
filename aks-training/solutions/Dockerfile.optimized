@@ -1,0 +1,43 @@
+# SOLUTION 1: Optimized Dockerfile
+# Metric: Size < 200MB, Non-root user
+
+# Stage 1: Builder
+# Use slim variant for smaller footprint
+FROM python:3.9-slim as builder
+
+WORKDIR /build
+
+# Copy only requirements first to cache pip install
+COPY requirements.txt .
+# Install to a local directory
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+# Stage 2: Runtime
+# Use distroless or slim for production
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Create a non-root user
+RUN adduser --disabled-password --gecos "" appuser
+
+# Copy dependencies from builder
+COPY --from=builder /root/.local /home/appuser/.local
+
+# Copy application code
+COPY . .
+
+# Ensure permissions
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Add local bin to PATH
+ENV PATH=/home/appuser/.local/bin:$PATH
+
+# Expose port
+EXPOSE 5000
+
+# Use array syntax for CMD
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]

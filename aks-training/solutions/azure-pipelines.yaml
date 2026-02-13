@@ -1,0 +1,48 @@
+# SOLUTION 3: Azure Pipeline YAML
+# Metric: Builds image, pushes to ACR, packages Helm chart
+
+trigger:
+- main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  # Replace with your ACR name
+  acrName: 'myacr'
+  imageRepository: 'legacy-app'
+  # Use BuildId as the tag
+  tag: '$(Build.BuildId)'
+
+steps:
+# 1. Build and Push Docker Image
+- task: Docker@2
+  displayName: Build and Push
+  inputs:
+    containerRegistry: '$(acrName)-connection'
+    repository: '$(imageRepository)'
+    command: 'buildAndPush'
+    Dockerfile: '**/Dockerfile'
+    tags: |
+      $(tag)
+      latest
+
+# 2. Package Helm Chart
+- task: HelmDeploy@0
+  displayName: Package Helm Chart
+  inputs:
+    command: package
+    chartPath: 'charts/legacy-app'
+    destination: '$(Build.ArtifactStagingDirectory)'
+    version: '0.1.$(Build.BuildId)' # Dynamic versioning
+
+# 3. Push Helm Chart to ACR (OCI)
+- task: AzureCLI@2
+  displayName: Push Chart to ACR
+  inputs:
+    azureSubscription: 'my-service-connection'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az acr login --name $(acrName)
+      az acr helm push -n $(acrName) $(Build.ArtifactStagingDirectory)/*.tgz
