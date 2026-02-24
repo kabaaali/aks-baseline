@@ -4,6 +4,99 @@
 
 ---
 
+## 🏗️ Foundational Structure: What You Need and Why
+
+Kubernetes is not a single tool — it is a **system of structured declarations**. Unlike traditional deployment scripts where you describe *how* to deploy, Kubernetes asks you to describe *what you want*, and then the system figures out how to get there. To work with Kubernetes effectively, you must understand the foundational **resource types**, **manifest anatomy**, and **supporting objects** that everything else is built upon.
+
+### The Core Resource Hierarchy
+
+```
+Cluster
+└── Namespace                    # Logical isolation boundary (dev, staging, prod)
+    ├── Deployment                # Manages rollout & self-healing of Pods
+    │   └── ReplicaSet            # Ensures desired number of Pods exist
+    │       └── Pod               # The actual running workload unit
+    ├── Service                   # Stable network endpoint for a set of Pods
+    ├── ConfigMap                 # Non-sensitive configuration data
+    ├── Secret                    # Sensitive configuration data (base64 encoded)
+    └── ServiceAccount + RBAC    # Identity and permissions for workloads
+```
+
+This isn't an abstract diagram — every resource exists as a YAML file you will write, commit to Git, and apply to a cluster.
+
+### The Anatomy of a Kubernetes Manifest
+
+Every Kubernetes resource follows the same four-field skeleton. These are not arbitrary — Kubernetes validates each field before accepting any manifest:
+
+```yaml
+apiVersion: apps/v1       # Which API group & version? (v1, apps/v1, batch/v1, etc.)
+kind: Deployment          # What type of resource is this?
+metadata:                 # Identity metadata (name, namespace, labels, annotations)
+  name: my-app
+  namespace: production
+  labels:
+    app: my-app
+    environment: production
+spec:                     # The desired state — what you want Kubernetes to achieve
+  replicas: 3
+  ...
+```
+
+| Field | Purpose | Why Necessary |
+|-------|---------|---------------|
+| `apiVersion` | Selects the correct API handler on the control plane | Wrong version = 404 error or missing features in the spec |
+| `kind` | Tells Kubernetes which controller will manage this resource | Omitting or misspelling causes immediate rejection |
+| `metadata.labels` | Key-value pairs used by Services and selectors to discover Pods | Without labels, Services cannot route traffic; HPAs cannot target Deployments |
+| `metadata.namespace` | Isolates resources per environment or team | Without namespaces, all teams share one flat space — names clash and RBAC is impossible |
+| `spec` | The heart of every manifest — the declared desired state | This is what Kubernetes continuously reconciles against reality |
+
+### Why Labels Are Not Optional
+
+Labels are the **nerve system** of Kubernetes. A Service finds its target Pods by matching labels. An HPA targets a Deployment by name. A NetworkPolicy restricts traffic between Pods by labels. If your labels are inconsistent — say your Pod has `app: my-app` but your Service selector expects `app: myapp` — traffic will silently fail with no error message. This is one of the most common debugging scenarios for new Kubernetes engineers.
+
+**Pattern to follow consistently:**
+
+```yaml
+labels:
+  app: <service-name>          # Matches Service selectors
+  version: v1.2.3              # Supports blue-green and canary deployments
+  environment: production      # Supports environment-level policies
+  managed-by: helm             # Tracks how the resource was deployed
+```
+
+### Why You Need a Deployment, Not Just a Pod
+
+Running a bare Pod directly is like deploying a single server with no failover. If the Pod crashes, it stays dead. A **Deployment** wraps your Pod template in a controller that:
+
+1. Maintains the desired number of running replicas
+2. Performs rolling updates with zero downtime
+3. Tracks rollout history for instant rollback
+4. Self-heals by replacing failed Pods automatically
+
+**The Pod template inside a Deployment is not a Pod manifest** — it is a template that the Deployment uses to create Pods. You never `kubectl apply` a Pod in production; you always go through a Deployment (or StatefulSet for stateful workloads).
+
+### Why Services Are Required (Not Optional)
+
+Pods are **ephemeral by design**. Every time a Pod restarts, it gets a new IP address. Any code that talks directly to a Pod IP will break on every restart. A Service:
+
+- Gets a **stable virtual IP (ClusterIP)** that never changes
+- Discovers backing Pods dynamically via label selectors
+- Load-balances connections across all healthy Pods automatically
+- Provides a **DNS name** (`service-name.namespace.svc.cluster.local`) that works from any Pod in the cluster
+
+Without a Service, you cannot reliably connect microservices to each other or expose them externally.
+
+### Supporting Structures: ConfigMaps and Secrets
+
+Embedding configuration and credentials directly in container images is a fundamental anti-pattern. ConfigMaps and Secrets separate configuration from code:
+
+- **ConfigMap**: Stores non-sensitive config (database hostname, feature flags, log levels) that can be injected as environment variables or mounted as files
+- **Secret**: Stores sensitive data (passwords, API keys, TLS certificates) with base64 encoding and RBAC-restricted access
+
+> **Important:** Secrets in Kubernetes are base64-encoded, not encrypted, by default. In AKS production environments, Secrets should be backed by **Azure Key Vault** via the Secrets Store CSI Driver.
+
+---
+
 ## 1. Deploy a Pod
 
 ### Concept: What is a Pod?

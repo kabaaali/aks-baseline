@@ -4,6 +4,143 @@
 
 ---
 
+## 🏗️ Foundational Structure: What You Need and Why
+
+Getting an application running in Kubernetes is only half the job. Getting it **reliably running at scale, with visibility, and with the ability to recover from failure** is the production challenge. This requires an entirely different set of foundational structures — not application code, but **platform-level manifests and configurations** that govern how your workloads behave under real-world conditions.
+
+Production readiness in AKS is built on three pillars, each with its own required structural components:
+
+```
+Production AKS Workload
+├── Resilience Layer                  # Survives traffic spikes and node failures
+│   ├── HorizontalPodAutoscaler       # Horizontal scaling based on metrics
+│   ├── VerticalPodAutoscaler         # Right-sizing CPU/memory requests
+│   ├── PodDisruptionBudget           # Guards availability during node drains
+│   └── resource.requests/limits      # Accurate sizing for scheduler decisions
+├── Observability Layer               # You can't fix what you can't see
+│   ├── Prometheus                    # Metrics collection and storage
+│   ├── Grafana                       # Metrics visualisation and dashboards
+│   ├── AlertManager                  # Alert routing and deduplication
+│   ├── ServiceMonitor                # Tells Prometheus which pods to scrape
+│   ├── PrometheusRule                # Defines alert thresholds and conditions
+│   └── Fluent Bit / OpenTelemetry   # Log shipping and distributed tracing
+└── Reliability Layer                 # Fails gracefully and recovers fast
+    ├── Health check probes            # Defined in Part 2, critical at scale
+    ├── Rolling update strategy        # Zero-downtime deployments
+    └── Topology spread constraints    # Distributes pods across fault domains
+```
+
+### Why Resource Requests and Limits Are Non-Negotiable
+
+Before any autoscaling can work, every pod must declare **resource requests** (the minimum guaranteed capacity) and **resource limits** (the maximum allowed). These are not suggestions — they are the foundational contract between your application and the Kubernetes scheduler:
+
+| Setting | What It Does | What Happens Without It |
+|---------|-------------|------------------------|
+| `resources.requests.cpu` | Reserves CPU on the node for this pod | The scheduler cannot make placement decisions — pods are deployed randomly and starve each other |
+| `resources.requests.memory` | Reserves memory on the node | Pods compete for memory; high-memory pods OOMKill lower-priority ones unpredictably |
+| `resources.limits.cpu` | Caps CPU usage (throttled, not killed) | One poorly-written pod can consume all node CPU, degrading every other pod on the node |
+| `resources.limits.memory` | Caps memory usage (container killed + restarted if exceeded) | Memory leaks can consume an entire node's memory, causing cascading failures |
+
+```yaml
+# This is the minimum required for any production pod:
+resources:
+  requests:
+    cpu: 200m      # 0.2 vCPU guaranteed
+    memory: 256Mi  # 256MB guaranteed on the node
+  limits:
+    cpu: 500m      # Max 0.5 vCPU (throttled if exceeded)
+    memory: 512Mi  # Max 512MB (OOMKilled if exceeded)
+```
+
+**The HPA cannot function without resource requests** — it calculates the scale target from the ratio of actual usage to requested capacity. No requests = HPA shows `<unknown>` utilisation and never scales.
+
+### Why the Observability Stack Is a Mandatory Platform Component
+
+Operating a production system without metrics, logs, and alerts is the equivalent of flying a plane without instruments. You can do it in good conditions, but any incident — a slow memory leak, a dependency timing out, a traffic spike — will go undetected until users are screaming.
+
+The observability stack is installed **once at the platform level** and serves all applications:
+
+```
+kube-prometheus-stack (Helm chart)
+├── Prometheus Operator           # Manages Prometheus instances, ServiceMonitors, PrometheusRules
+├── Prometheus Server             # Scrapes and stores metrics
+├── Grafana                       # Dashboards — pre-loaded with Kubernetes cluster dashboards
+├── AlertManager                  # Groups, deduplicates, and routes alerts
+├── kube-state-metrics            # Exports cluster state as metrics (node conditions, pod states)
+└── node-exporter                 # Exports node-level OS metrics (CPU, disk, network)
+```
+
+This entire stack is deployed with one `helm install` command. The reason it's packaged together is that each component depends on the others: for example, AlertManager is useless without Prometheus, and PrometheusRules are useless without AlertManager configured to route them.
+
+### The ServiceMonitor: Connecting Your App to Prometheus
+
+After installing the platform observability stack, your application does **not** automatically get scraped. You must tell Prometheus which pods expose metrics and where to find them. This is done with a `ServiceMonitor` resource (a Custom Resource Definition introduced by the Prometheus Operator):
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: my-app-metrics          # Identifies this scrape configuration
+  namespace: production         # Must match the namespace of your Service
+spec:
+  selector:
+    matchLabels:
+      app: my-app               # Matches your app's Service labels
+  endpoints:
+  - port: metrics               # The named port on your Service that serves /metrics
+    interval: 30s               # Scrape every 30 seconds
+    path: /metrics              # The Prometheus metrics endpoint path
+```
+
+Without the `ServiceMonitor`, Prometheus scrapes zero metrics from your application. Without metrics, your Grafana dashboards show nothing, your HPA using custom metrics cannot function, and your alert rules have no data to evaluate.
+
+### The PrometheusRule: Your Alert Structure
+
+Alerts are not configured in Prometheus's config file — they are defined as Kubernetes resources called `PrometheusRule`. This means alert definitions are:
+- Version-controlled in Git
+- Deployed via ArgoCD like any other manifest
+- Visible as Kubernetes resources (`kubectl get prometheusrule`)
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: my-app-alerts
+  namespace: monitoring
+spec:
+  groups:
+  - name: my-app                # Group name (organises alerts in the UI)
+    rules:
+    - alert: HighErrorRate      # Human-readable alert name
+      expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+      for: 5m                   # Must be true for 5 continuous minutes before firing
+      labels:
+        severity: critical      # Used by AlertManager to route to PagerDuty vs Slack
+      annotations:
+        summary: "Error rate above 5%"
+        description: "Current error rate: {{ $value }}"
+```
+
+### The PodDisruptionBudget: Your Safety Net for Node Maintenance
+
+AKS automatically drains nodes for maintenance, OS patching, and node pool upgrades. Without a `PodDisruptionBudget` (PDB), Kubernetes may terminate all replicas of your application simultaneously during a drain — causing complete downtime.
+
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: my-app-pdb
+spec:
+  minAvailable: 2          # At least 2 replicas must always be running
+  selector:
+    matchLabels:
+      app: my-app
+```
+
+This single YAML file guarantees that if you have 5 replicas, Kubernetes will never drain more nodes simultaneously than would cause the count to drop below 2. **This is the minimum required for any Deployment with multiple replicas in production.**
+
+---
+
 ## 1. Configure Auto-Scaling
 
 ### Horizontal Pod Autoscaler (HPA)

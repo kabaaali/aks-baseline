@@ -4,6 +4,99 @@
 
 ---
 
+## 🏗️ Foundational Structure: What You Need and Why
+
+Once you can write raw Kubernetes YAML, the next problem you encounter is **repetition and environmental drift**. Imagine deploying the same application to three environments (Dev, Staging, Production) — each with slightly different replica counts, image tags, resource limits, and hostnames. Without tooling, you end up with three near-identical YAML files that slowly diverge as different engineers make manual changes. Helm fixes this by introducing **package management and templating** for Kubernetes manifests.
+
+Understanding Helm's file structure is not optional — every file in a chart plays a specific structural role. Omitting or misplacing any of them breaks the chart.
+
+### The Required Chart Structure
+
+```
+my-app/                         # The chart directory (= the package)
+├── Chart.yaml                  # REQUIRED: Chart identity and metadata
+├── values.yaml                 # REQUIRED: Default configuration (the "contract")
+├── charts/                     # REQUIRED directory: Sub-chart dependencies
+├── templates/                  # REQUIRED directory: Kubernetes manifest templates
+│   ├── _helpers.tpl            # REQUIRED: Reusable template functions
+│   ├── deployment.yaml         # Template for the Deployment resource
+│   ├── service.yaml            # Template for the Service resource
+│   ├── hpa.yaml                # Template for autoscaling (when enabled)
+│   ├── ingress.yaml            # Template for external access (when enabled)
+│   └── NOTES.txt               # Post-install instructions printed to the user
+└── .helmignore                 # Prevents dev files from entering packaged chart
+```
+
+Environment-specific overrides live **outside** the chart:
+```
+environments/
+├── values-dev.yaml             # Overrides for Dev (fewer replicas, relaxed limits)
+├── values-staging.yaml         # Overrides for Staging (mirrors prod sizing)
+└── values-prod.yaml            # Overrides for Production (HPA, TLS, strict limits)
+```
+
+### Why Each File Is Necessary
+
+| File | Role | What Breaks Without It |
+|------|------|------------------------|
+| `Chart.yaml` | Declares the chart name, version, and app version | Helm cannot parse the chart at all — it validates this file first |
+| `values.yaml` | Provides the default values for all template variables | Templates reference `.Values.*` — without defaults, every install fails unless the caller overrides everything |
+| `templates/_helpers.tpl` | Defines reusable named templates (`myapp.fullname`, `myapp.labels`, `myapp.selectorLabels`) | Templates become verbose and inconsistent — label sets drift between resources, causing Service-to-Pod selector mismatches |
+| `charts/` directory | Holds packaged sub-chart dependencies (PostgreSQL, Redis) | `helm dependency update` has nowhere to download to; chart packaging fails |
+| Environment `values-*.yaml` | Provides per-environment overrides without touching the base chart | Engineers manually edit the chart for each environment, creating drift and breaking other environments |
+
+### The Values Contract: Your API to the Chart
+
+`values.yaml` is not just configuration — it is the **public API of your chart**. Anyone installing the chart interacts with it through values. This means:
+
+1. **Every configurable parameter must have a default in `values.yaml`** — so the chart works out-of-the-box with `helm install myapp .`
+2. **Values are hierarchical** — structured as nested YAML objects (`image.repository`, `image.tag`, `resources.limits.cpu`) to avoid flat, colliding key names
+3. **Feature flags use booleans** — `ingress.enabled: false`, `autoscaling.enabled: false` let templates conditionally render resources without deleting template files
+
+```yaml
+# values.yaml — the contract
+image:
+  repository: myregistry.azurecr.io/myapp   # Where to pull from
+  tag: ""                                     # Empty = uses Chart.yaml's appVersion
+  pullPolicy: IfNotPresent                   # Never pull if locally cached
+
+autoscaling:
+  enabled: false      # Feature flag — templates check this before rendering HPA
+  minReplicas: 2
+  maxReplicas: 10
+
+ingress:
+  enabled: false      # Feature flag — templates check this before rendering Ingress
+```
+
+### Why `_helpers.tpl` Is the Most Critical Template File
+
+`_helpers.tpl` is the only file with a leading underscore — Helm skips rendering it as a Kubernetes manifest but makes it available for import. It stores **named template functions** that every other template file calls. Without it:
+
+- Your `deployment.yaml` and `service.yaml` would each define labels differently
+- A typo in one place causes a Service selector to stop matching Pod labels
+- Changing the app name requires editing every template file instead of one function
+
+The three functions every chart must define in `_helpers.tpl`:
+
+```
+myapp.fullname        → Used as the resource name (handles release name + chart name)
+myapp.labels          → Full label set including Helm tracking labels
+myapp.selectorLabels  → Minimal label set used by Service selectors and Deployments
+```
+
+### The Pattern: Separate What Changes From What Doesn't
+
+The entire Helm architecture is built on one principle: **separate structure from configuration**. Templates define structure (what resources exist and their relationships). Values define configuration (replica counts, image versions, resource limits). This separation means:
+
+- A change to `values-prod.yaml` deploys a new version — template files never need touching
+- The same chart can be used by five different teams through different values files
+- Rolling back is as simple as reverting the values file in Git
+
+This is the foundation that makes GitOps with ArgoCD (covered in Part 4) possible.
+
+---
+
 ## 1. Create a Helm Chart
 
 ### Concept: What is a Helm Chart?

@@ -4,6 +4,58 @@
 
 ---
 
+## 🏗️ Foundational Structure: What You Need and Why
+
+Before writing a single line of application code destined for a container, you need to understand the **foundational files and structures** that make containerization work. These aren't optional extras — they are the load-bearing walls of your container workflow. Missing or misconfiguring any one of them will result in bloated images, slow builds, failed deployments, or security vulnerabilities in production.
+
+### The Essential File Structure
+
+```
+my-app/
+├── Dockerfile              # The blueprint — tells Docker how to build your image
+├── .dockerignore           # The filter — prevents unnecessary files entering the build context
+├── docker-compose.yml      # The local orchestrator — runs multi-container setups locally
+├── MyApp.csproj            # (or requirements.txt / package.json) — the dependency manifest
+└── src/
+    └── ...                 # Your application source code
+```
+
+### Why Each File Matters
+
+| File | Role | What Happens Without It |
+|------|------|--------------------------|
+| `Dockerfile` | Defines the exact build recipe: base image, dependencies, code copy, and startup command | Without it, Docker has nothing to build. There is no image, no container. |
+| `.dockerignore` | Prevents Git history, local secrets (`.env`), IDE files, and build artefacts from bloating the build context sent to the Docker daemon | Without it, every build sends gigabytes of irrelevant data, slowing builds significantly and risking leaking secrets into the image |
+| `docker-compose.yml` | Lets you run your app alongside its dependencies (database, cache, message queue) locally with a single command | Without it, developers must manually run and link containers, leading to "works on my machine" syndrome |
+| Dependency manifest (`.csproj`, `requirements.txt`, `package.json`) | Lists every library your app needs, pinned to specific versions | Without it pinned and copied *before* your source code, Docker cannot cache the expensive `restore`/`install` step—rebuilding every time any file changes |
+
+### The Mental Model: Why Order Matters in a Dockerfile
+
+Docker builds images in **layers**, and each layer is cached. The golden rule is: **copy what changes least, first**. Your dependency manifest changes far less often than your source code. If you copy dependencies first and install them, Docker will reuse that cached layer on every subsequent build — making rebuilds 10x faster.
+
+```
+[Layer 1] Base OS image         ← almost never changes → always cached
+[Layer 2] System packages       ← rarely changes → usually cached
+[Layer 3] Dependency manifest   ← changes when you add libraries → cached most times
+[Layer 4] Install dependencies  ← expensive operation → cached when Layer 3 unchanged
+[Layer 5] Application source    ← changes every commit → always rebuilt
+[Layer 6] Run command           ← metadata, no layer cost
+```
+
+This ordering isn't just a best practice — in a team of 10 engineers committing several times a day, poor layer ordering can add **hours of wasted CI/CD time** across the team every week.
+
+### The Multi-Stage Build Imperative
+
+A single-stage Dockerfile that uses an SDK image in production is one of the most common beginner mistakes. The SDK (e.g., `.NET SDK`, `node:lts`) contains compilers, package managers, debug tools, and documentation — none of which your running application needs. The consequence:
+
+- **Security surface**: Every tool in the image is a potential attack vector
+- **Image size**: SDK images are 600–800MB vs a runtime image at 100–220MB
+- **Pull time**: Larger images slow down cold starts in autoscaling scenarios
+
+Multi-stage builds solve this by using a builder stage (with the full SDK) and a final stage (with only the runtime). Only the compiled output crosses the stage boundary. **This pattern is mandatory for any production workload.**
+
+---
+
 ## 1. Write a Dockerfile for Your App
 
 ### Concept: What is a Dockerfile?
