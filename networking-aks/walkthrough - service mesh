@@ -1,0 +1,29 @@
+AKS Service Mesh Engineering Document — Walkthrough
+What Was Created
+A single comprehensive nth-level engineering reference document saved to:
+
+AKS_SERVICE_MESH_ENGINEERING.md
+
+Document Structure (13 Sections)
+#	Section	What it covers
+1	Executive Summary	Design principles, key decisions table
+2	Architecture Overview	Full Mermaid diagram of APIM → NGINX → Istio mesh, network CIDRs
+3	Layer-by-Layer Breakdown	APIM policy XML, NGINX Ingress YAML, K8s Service, Envoy iptables interception
+4	End-to-End Request Flow	Complete annotated sequence diagram (19 steps), header state table at every hop
+5	Istio Control Plane Deep Dive	istiod, Pilot/Citadel, xDS (LDS/CDS/EDS/RDS) step-by-step, K8s→xDS translation
+6	Envoy Sidecar — Engine Room	Inbound/outbound filter pipeline, key ports table, istioctl debug commands
+7	mTLS / SPIFFE	SPIFFE identity format, TLS 1.3 handshake flow, PeerAuthentication STRICT, DestinationRule
+8	Traffic Management	VirtualService (canary, retries, fault injection), circuit breaking, NGINX vs Istio Gateway
+9	Observability	Auto-emitted metrics, trace header propagation (.NET code), Telemetry API, JSON access log format
+10	Security Policies	AuthorizationPolicy deny-all + explicit allow, RequestAuthentication JWT, security flow diagram
+11	Microservice Developer Contract	What mesh handles vs what app code must do, complete Deployment YAML with Istio annotations
+12	Production Config Reference	Namespace bootstrap CLI checklist, Private DNS Zone setup (az commands)
+13	Troubleshooting Playbook	4 runbooks: pod unreachable, mTLS failure, APIM→NGINX, high latency
+A	Quick Reference Card	FQDN chain, TLS termination points, all Istio CRDs summarised
+Key Design Featured
+APIM sits outside AKS: uses Azure Private DNS to resolve *.apps.internal.local → NGINX Internal LB IP
+NGINX is the TLS termination boundary for north-south traffic (APIM → cluster)
+Istio (AKS addon) handles east-west mTLS between microservices transparently
+Envoy iptables intercept: all pod traffic redirected through istio-proxy on ports 15001/15006
+SPIFFE identities (spiffe://cluster.local/ns/<ns>/sa/<sa>) used for zero-trust AuthorizationPolicy
+.NET trace header propagation code included so distributed tracing works across services
